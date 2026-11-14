@@ -15,7 +15,19 @@ path = "src/lib.rs"
 name = "nea"
 path = "src/main.rs"
 
+[[bin]]
+name = "nea-desktop"
+path = "src/bin/nea-desktop.rs"
+required-features = ["desktop"]
+
+[features]
+# Native window around the web UI (needs WebView2 / WKWebView / WebKitGTK).
+desktop = ["dep:wry", "dep:tao", "dep:png"]
+
 [dependencies]
+wry = { version = "0.45", optional = true }
+tao = { version = "0.30", optional = true }
+png = { version = "0.17", optional = true }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }

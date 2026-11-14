@@ -75,6 +75,13 @@ async fn host_guard(State(st): State<S>, req: Request, next: Next) -> Response {
 }
 
 pub async fn serve(archive: Archive, opts: OpenOptions, port: u16, open_browser: bool) -> Result<()> {
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await?;
+    serve_with(archive, opts, listener, open_browser).await
+}
+
+/// Serve on an already-bound local listener (the desktop shell binds port 0).
+pub async fn serve_with(archive: Archive, opts: OpenOptions, listener: tokio::net::TcpListener, open_browser: bool) -> Result<()> {
+    let port = listener.local_addr()?.port();
     let root = archive.root.clone();
     let st: S = Arc::new(AppState { archive: Mutex::new(archive), root, opts, port, jobs: Mutex::new(Vec::new()), importing: Default::default() });
 
@@ -91,8 +98,6 @@ pub async fn serve(archive: Archive, opts: OpenOptions, port: u16, open_browser:
     });
 
     let app = router(st.clone());
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     let url = format!("http://127.0.0.1:{port}/");
     println!("Natendo Email Archiver running at {url}  (Ctrl+C to stop)");
     if open_browser {

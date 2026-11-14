@@ -14,8 +14,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev
       - run: cargo test --all-targets
-      - run: cargo build --release
+      - run: cargo build --release --features desktop
       - name: Benchmark (20k synthetic messages)
         run: ./target/release/nea bench --messages 20000
         shell: bash
@@ -25,4 +28,6 @@ jobs:
           path: |
             target/release/nea
             target/release/nea.exe
+            target/release/nea-desktop
+            target/release/nea-desktop.exe
           if-no-files-found: ignore

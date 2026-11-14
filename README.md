@@ -6,7 +6,7 @@ Archive all your email in one local archive you own, then **find anything in it 
 
 Natendo Email Archiver pulls mail from IMAP accounts (Gmail, Outlook.com, Fastmail, any server), MBOX files, Google Takeout, Thunderbird, folders of `.eml` files, and MailStore Home exports into a single deduplicated archive. Its focus is search: typo-tolerant, stemmed, ranked full-text search over bodies **and attachments**, Gmail-style operators, live facets, and a query language that never throws a syntax error.
 
-> Status: early MVP (v0.1). Command line + local web UI. Windows, macOS and Linux. See [Roadmap](#roadmap).
+> Status: early MVP (v0.1). Desktop window, local web UI and command line. Windows, macOS and Linux. See [Roadmap](#roadmap).
 
 ## Highlights
 
@@ -27,6 +27,14 @@ cargo build --release
 ```
 
 The binary is `target/release/nea` (`nea.exe` on Windows).
+
+For the desktop app (the same UI in a native window, using the system web view):
+
+```bash
+cargo build --release --features desktop
+```
+
+This adds `nea-desktop` (`nea-desktop.exe`), which opens your archive (default `Documents/Natendo Archive`, or a path given as its argument) in its own window. On Linux it needs `libwebkit2gtk-4.1-dev` and `libgtk-3-dev` to build.
 
 Try it with demo mail:
 
@@ -99,7 +107,7 @@ Anything not understood is searched as plain text, so a query is never an error.
 
 `nea serve --open` starts the UI at `http://127.0.0.1:8765/`: search-as-you-type, facets, highlighted snippets (including inside attachments), threaded conversations, sender autocomplete for `from:`/`to:`, a sandboxed message viewer, attachment download, `.eml` download, and an import dialog for files and MailStore exports. Keyboard: `/` search, `j`/`k` next/previous, `Esc` back.
 
-The UI is a single static page over a small JSON API (`/api/search`, `/api/message/:id`, ...), so the planned desktop shell (Tauri) can reuse it unchanged.
+The UI is a single static page over a small JSON API (`/api/search`, `/api/message/:id`, ...), which the desktop shell (`nea-desktop`, built on the same webview libraries Tauri uses) loads unchanged.
 
 ## How it works
 
@@ -155,7 +163,7 @@ Source map: `src/archive.rs` (storage and sync), `src/pack.rs`, `src/journal.rs`
 
 ## Roadmap
 
-- Desktop app shell (Tauri) with installers, tray icon and scheduled background archiving.
+- Installers (MSI/DMG/AppImage), tray icon and scheduled background archiving for the desktop app.
 - Gmail and Microsoft 365 sign-in with OAuth (today: IMAP with app passwords).
 - PST/OST import is experimental (verified on an empty PST only; needs real-file testing); restore to IMAP.
 - OCR for scanned PDFs and images; optional local semantic search ("the email where the landlord agreed to fix the heater").
