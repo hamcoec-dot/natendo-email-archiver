@@ -30,8 +30,12 @@ use crate::pack::{self, PackReader, PackWriter};
 use crate::parse::{self, ParsedMessage};
 
 pub const FORMAT_VERSION: u32 = 1;
-/// Commit to disk every N new messages during an import.
-const COMMIT_EVERY: usize = 2000;
+/// During an import, commit (journal fsync + index commit) every N new
+/// messages or every few seconds, whichever comes first. Commits are the
+/// expensive part of indexing; a crash loses at most this much progress,
+/// and re-running the import re-adds it.
+const COMMIT_EVERY: usize = 25_000;
+const COMMIT_SECS: u64 = 15;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
@@ -119,6 +123,7 @@ pub struct Archive {
     pub packs: PackReader,
     dirty: HashSet<String>,
     pending: usize,
+    last_commit: std::time::Instant,
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -201,6 +206,7 @@ impl Archive {
             packs: PackReader::new(root),
             dirty: HashSet::new(),
             pending: 0,
+            last_commit: std::time::Instant::now(),
         };
         let ver: Option<String> = a
             .catalog
@@ -309,7 +315,7 @@ impl Archive {
                 self.dirty.insert(p.id.clone());
             }
         }
-        if self.pending + self.dirty.len() >= COMMIT_EVERY {
+        if self.pending + self.dirty.len() >= COMMIT_EVERY || self.last_commit.elapsed().as_secs() >= COMMIT_SECS {
             self.commit()?;
         }
         if let Some(l) = self.lock.as_mut() {
@@ -375,6 +381,7 @@ impl Archive {
         self.index.commit()?;
         self.catalog.commit()?;
         self.pending = 0;
+        self.last_commit = std::time::Instant::now();
         // Our own entries are already applied; advance the replay offsets.
         if self.journal.is_some() {
             for (seg, path) in journal::segments(&self.root)? {

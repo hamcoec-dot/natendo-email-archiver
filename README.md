@@ -14,7 +14,7 @@ Natendo Email Archiver pulls mail from IMAP accounts (Gmail, Outlook.com, Fastma
 - **Attachment text** from PDF, Word, Excel, PowerPoint, OpenDocument, RTF, HTML, text and ZIP contents, extracted in pure Rust (no Windows iFilters needed).
 - **Facets** for sender domain and address, year and month, folder and attachment type, with live counts. Click to narrow, Shift+click to exclude.
 - **Archive anywhere**: local disk, USB drive, or a NAS/network share. Several computers can read the same archive; one writes at a time.
-- **Fast**: about 6,500 messages/second import and 5 ms median search (with facets and snippets) on a 50,000-message archive. See [Performance](#performance).
+- **Fast**: about 7,800 messages/second import and 8 ms median search (with facets and snippets) on a 250,000-message archive. See [Performance](#performance).
 - **Open, durable format**: messages are stored byte-for-byte as received, content-addressed by SHA-256, in documented append-only files. Everything else is rebuildable.
 - **Private**: runs entirely on your computer. The UI listens on `127.0.0.1` only; HTML mail is sandboxed and remote images are blocked until you allow them.
 
@@ -133,13 +133,14 @@ nea export --format eml --out "D:/Export"     # everything, as .eml files in fol
 
 ## Performance
 
-`nea bench --messages 50000` on a Windows 11 desktop (release build):
+`nea bench` on a Windows 11 desktop (release build, synthetic mail):
 
-| Measure | Result |
-|---|---|
-| Import (parse, dedupe, store, index) | 6,543 messages/s |
-| Search, median (includes facets and snippets) | 5.7 ms |
-| Search, 95th percentile | 17.4 ms |
+| Archive size | Import (parse, dedupe, store, index) | Search median | Search 95th percentile |
+|---|---|---|---|
+| 50,000 messages | 6,543 messages/s | 5.7 ms | 17.4 ms |
+| 250,000 messages | 7,783 messages/s | 8.2 ms | 49.2 ms |
+
+Search times include facet counts and highlighted snippets. At this rate a 1,000,000-message archive imports from local files in about two minutes (network speed limits IMAP).
 
 Run the benchmark on your own machine; CI runs it on Windows, macOS and Linux for every commit.
 
