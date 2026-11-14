@@ -153,12 +153,13 @@ pub fn find_mboxes(path: &Path) -> Vec<(PathBuf, String)> {
             continue;
         }
         let rel = p.strip_prefix(path).unwrap_or(p);
-        let folder = rel
-            .with_extension("")
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().trim_end_matches(".sbd").to_string())
-            .collect::<Vec<_>>()
-            .join("/");
+        let mut parts: Vec<String> =
+            rel.with_extension("").components().map(|c| c.as_os_str().to_string_lossy().trim_end_matches(".sbd").to_string()).collect();
+        // A whole Thunderbird profile: drop the Mail/ or ImapMail/ prefix.
+        if parts.len() > 2 && (parts[0] == "Mail" || parts[0] == "ImapMail") {
+            parts.remove(0);
+        }
+        let folder = parts.join("/");
         out.push((p.to_path_buf(), folder));
     }
     out

@@ -10,6 +10,7 @@ pub mod journal;
 pub mod lock;
 pub mod pack;
 pub mod parse;
+pub mod detect;
 pub mod profile;
 pub mod query;
 pub mod rules;

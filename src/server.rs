@@ -123,6 +123,7 @@ pub fn router(st: S) -> Router {
         .route("/api/profiles/:name", axum::routing::delete(delete_profile))
         .route("/api/profiles/:name/run", post(run_profile))
         .route("/api/outlook/folders", get(outlook_folders))
+        .route("/api/detect", get(|| async { Json(tokio::task::spawn_blocking(crate::detect::detect).await.unwrap_or_default()) }))
         .route("/api/run", post(run_adhoc))
         .route("/api/jobs", get(jobs))
         .route("/api/export", post(export))

@@ -157,7 +157,8 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
   <div class="modal">
     <h2>Archive mail</h2>
     <div id="profiles"></div>
-    <label for="impKind">Source</label>
+    <label for="impKind">Source <button class="btn small" id="detectBtn" type="button">Find mail on this computer</button></label>
+    <div id="detected" class="picker" style="display:none"></div>
     <select id="impKind">
       <option value="outlook">Outlook on this PC (classic Outlook, Windows)</option>
       <option value="imap">Email account over IMAP (Gmail, Outlook.com, any server)</option>
@@ -626,6 +627,19 @@ async function loadProfiles() {
     try { await postJson(`/api/profiles/${encodeURIComponent(p.name)}`, null, "DELETE"); loadProfiles(); } catch (e) { impError(e); }
   });
 }
+$("#detectBtn").onclick = async () => {
+  const box = $("#detected");
+  box.style.display = "";
+  box.innerHTML = "<small>Looking…</small>";
+  const list = await (await fetch("/api/detect")).json();
+  box.innerHTML = list.map((f, i) => `<label class="check"><input type="radio" name="det" data-i="${i}"> ${esc(f.label)} <small>${esc(f.path || "")}</small></label>`).join("") || "<small>Nothing found in the usual places. Pick a source and enter its path below.</small>";
+  box.querySelectorAll("input").forEach((r) => r.onchange = () => {
+    const f = list[r.dataset.i];
+    $("#impKind").value = f.kind; $("#impKind").onchange();
+    if (f.path) $("#impPath").value = f.path;
+    if (!$("#profName").value) $("#profName").value = f.label.replace(/"/g, "");
+  });
+};
 $("#importBtn").onclick = () => { openModal("#importModal"); loadProfiles(); pollJobs(); };
 let pollTimer = null, wasRunning = false;
 async function pollJobs() {

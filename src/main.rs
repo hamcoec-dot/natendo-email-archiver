@@ -54,6 +54,8 @@ enum Cmd {
     Profile(ProfileCmd),
     /// List mailboxes and mail folders in this PC's Outlook profile.
     OutlookFolders,
+    /// Find mail on this computer (Outlook, Thunderbird, SeaMonkey, Windows Live Mail).
+    Detect,
     /// Search the archive.
     Search {
         query: Vec<String>,
@@ -442,6 +444,19 @@ fn main() -> Result<()> {
                     } else {
                         bail!("no profile named {name:?}");
                     }
+                }
+            }
+        }
+        Cmd::Detect => {
+            let found = nea::detect::detect();
+            if found.is_empty() {
+                println!("No mail programs' data found in the usual places.");
+            }
+            for f in found {
+                if f.kind == "outlook" {
+                    println!("{:8} {}   ->  nea import outlook", f.kind, f.label);
+                } else {
+                    println!("{:8} {}   ->  nea import {} \"{}\"", f.kind, f.label, f.kind, f.path.display());
                 }
             }
         }
