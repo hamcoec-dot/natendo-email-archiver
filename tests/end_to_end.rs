@@ -314,3 +314,16 @@ fn empty_pst_imports_cleanly() {
     let st = nea::import::pst::import(&mut a, Path::new("Cargo.toml"), "outlook", |_| {}).unwrap();
     assert_eq!(st.failed, 1, "non-PST reported, not a crash");
 }
+
+/// The Outlook bridge script must parse cleanly (Windows only; needs PowerShell).
+#[cfg(windows)]
+#[test]
+fn outlook_bridge_script_parses() {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts").join("outlook-bridge.ps1");
+    let cmd = format!(
+        "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('{}',[ref]$null,[ref]$e); if($e){{$e|%{{$_.ToString()}}; exit 1}}",
+        script.display()
+    );
+    let out = std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &cmd]).output().unwrap();
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+}

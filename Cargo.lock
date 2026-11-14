@@ -2029,6 +2029,7 @@ dependencies = [
  "regex",
  "rpassword",
  "rusqlite",
+ "rustls-connector",
  "serde",
  "serde_json",
  "sha2",

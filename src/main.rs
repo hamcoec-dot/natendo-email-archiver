@@ -3,10 +3,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use nea::archive::{Archive, ImportStats, OpenOptions};
-use nea::import::{eml, imap, mbox};
+use nea::import::{imap, mbox, outlook, pop3};
+use nea::profile::{Profile, Source};
+use nea::rules::{DateWindow, DeleteRule};
 use nea::query::Sort;
 
 /// Natendo Email Archiver: archive email locally and find anything in it.
@@ -47,6 +49,11 @@ enum Cmd {
     /// Import mail into the archive.
     #[command(subcommand)]
     Import(ImportCmd),
+    /// Saved archiving profiles (re-runnable imports with rules).
+    #[command(subcommand)]
+    Profile(ProfileCmd),
+    /// List mailboxes and mail folders in this PC's Outlook profile.
+    OutlookFolders,
     /// Search the archive.
     Search {
         query: Vec<String>,
@@ -97,6 +104,45 @@ enum Cmd {
     },
 }
 
+/// Which messages to archive.
+#[derive(Args, Clone, Default)]
+struct WindowArgs {
+    /// Only mail on or after this date (YYYY-MM-DD).
+    #[arg(long)]
+    after: Option<String>,
+    /// Only mail before this date (YYYY-MM-DD).
+    #[arg(long)]
+    before: Option<String>,
+    /// Only mail at least this many days old.
+    #[arg(long, value_name = "DAYS")]
+    older_than: Option<u32>,
+}
+
+impl WindowArgs {
+    fn window(&self) -> DateWindow {
+        DateWindow { after: self.after.clone(), before: self.before.clone(), older_than_days: self.older_than }
+    }
+}
+
+/// Delete mail from the source once it is safely archived.
+#[derive(Args, Clone, Default)]
+struct DeleteArgs {
+    /// After archiving, delete mail older than DAYS from the source
+    /// (0 = any age). Flagged mail is never deleted; unread mail is kept
+    /// unless --include-unread. Only mail the archive holds is deleted.
+    #[arg(long, value_name = "DAYS")]
+    delete_older_than: Option<u32>,
+    /// With --delete-older-than, also delete unread mail.
+    #[arg(long, requires = "delete_older_than")]
+    include_unread: bool,
+}
+
+impl DeleteArgs {
+    fn rule(&self) -> Option<DeleteRule> {
+        self.delete_older_than.map(|d| DeleteRule { older_than_days: d, include_unread: self.include_unread })
+    }
+}
+
 #[derive(Subcommand, Clone)]
 enum ImportCmd {
     /// A folder of .eml files (subfolders become folders).
@@ -104,24 +150,51 @@ enum ImportCmd {
         dir: PathBuf,
         #[arg(long, default_value = "files")]
         src: String,
+        #[command(flatten)]
+        window: WindowArgs,
     },
     /// A MailStore Home "Export to directory (EML)" folder.
     Mailstore {
         dir: PathBuf,
         #[arg(long, default_value = "mailstore")]
         src: String,
+        #[command(flatten)]
+        window: WindowArgs,
     },
     /// An mbox file, Google Takeout mbox, or Thunderbird profile folder.
     Mbox {
         path: PathBuf,
         #[arg(long, default_value = "mbox")]
         src: String,
+        #[command(flatten)]
+        window: WindowArgs,
     },
     /// An Outlook .pst or .ost file (experimental).
     Pst {
         path: PathBuf,
         #[arg(long, default_value = "outlook")]
         src: String,
+        #[command(flatten)]
+        window: WindowArgs,
+    },
+    /// Mail straight from the Outlook profile on this PC (Windows, classic Outlook).
+    Outlook {
+        /// Only these mailboxes / data files (repeatable; see `nea outlook-folders`).
+        #[arg(long)]
+        store: Vec<String>,
+        /// Only these folders, e.g. "Inbox" or "Inbox/Receipts" (repeatable).
+        #[arg(long)]
+        folder: Vec<String>,
+        /// Also archive Deleted Items and Junk.
+        #[arg(long)]
+        include_all: bool,
+        /// Scan everything again instead of only mail received since the last run.
+        #[arg(long)]
+        full_rescan: bool,
+        #[command(flatten)]
+        window: WindowArgs,
+        #[command(flatten)]
+        delete: DeleteArgs,
     },
     /// An IMAP account (Gmail, Outlook.com, Fastmail, any IMAP server).
     Imap {
@@ -147,7 +220,108 @@ enum ImportCmd {
         /// Allow an unencrypted connection (testing only).
         #[arg(long)]
         plaintext: bool,
+        #[command(flatten)]
+        window: WindowArgs,
+        #[command(flatten)]
+        delete: DeleteArgs,
     },
+    /// A POP3 mailbox.
+    Pop3 {
+        #[arg(long)]
+        host: String,
+        #[arg(long, default_value_t = 995)]
+        port: u16,
+        #[arg(long)]
+        user: String,
+        /// Environment variable holding the password (prompted for when not set).
+        #[arg(long, default_value = "NEA_POP3_PASSWORD")]
+        password_env: String,
+        /// Source name to record (default user@host).
+        #[arg(long)]
+        src: Option<String>,
+        /// Allow an unencrypted connection (testing only).
+        #[arg(long)]
+        plaintext: bool,
+        #[command(flatten)]
+        window: WindowArgs,
+        #[command(flatten)]
+        delete: DeleteArgs,
+    },
+}
+
+impl ImportCmd {
+    /// The same import as a (possibly unsaved) archiving profile.
+    fn to_profile(&self, name: &str) -> Profile {
+        let (source, window, password_env) = match self.clone() {
+            ImportCmd::Eml { dir, src, window } => (Source::Eml { path: abs(dir), src: Some(src) }, window.window(), None),
+            ImportCmd::Mailstore { dir, src, window } => (Source::Mailstore { path: abs(dir), src: Some(src) }, window.window(), None),
+            ImportCmd::Mbox { path, src, window } => (Source::Mbox { path: abs(path), src: Some(src) }, window.window(), None),
+            ImportCmd::Pst { path, src, window } => (Source::Pst { path: abs(path), src: Some(src) }, window.window(), None),
+            ImportCmd::Outlook { store, folder, include_all, full_rescan, window, delete } => (
+                Source::Outlook(outlook::OutlookConfig {
+                    stores: store,
+                    folders: folder,
+                    exclude: if include_all { vec![] } else { outlook::default_exclude() },
+                    window: window.window(),
+                    delete: delete.rule(),
+                    full_rescan,
+                }),
+                DateWindow::default(),
+                None,
+            ),
+            ImportCmd::Imap { host, port, user, password_env, folder, include_all, src, plaintext, window, delete } => (
+                Source::Imap(imap::ImapConfig {
+                    host,
+                    port,
+                    user,
+                    src,
+                    folders: folder,
+                    exclude: if include_all { vec![] } else { imap::DEFAULT_EXCLUDE.iter().map(|s| s.to_string()).collect() },
+                    plaintext,
+                    window: window.window(),
+                    delete: delete.rule(),
+                    ..Default::default()
+                }),
+                DateWindow::default(),
+                Some(password_env),
+            ),
+            ImportCmd::Pop3 { host, port, user, password_env, src, plaintext, window, delete } => (
+                Source::Pop3(pop3::Pop3Config { host, port, user, password: String::new(), src, plaintext, window: window.window(), delete: delete.rule() }),
+                DateWindow::default(),
+                Some(password_env),
+            ),
+        };
+        Profile { name: name.to_string(), source, window, password_env, last_run: None }
+    }
+}
+
+fn abs(p: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&p).map(|c| {
+        // Avoid Windows "\\?\" verbatim prefixes in saved profiles.
+        let s = c.to_string_lossy().to_string();
+        PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s))
+    }).unwrap_or(p)
+}
+
+#[derive(Subcommand, Clone)]
+enum ProfileCmd {
+    /// Save an archiving profile, e.g.
+    /// `nea profile add "Work Outlook" outlook --older-than 90 --delete-older-than 365`
+    Add {
+        name: String,
+        #[command(subcommand)]
+        source: ImportCmd,
+    },
+    /// List saved profiles.
+    List,
+    /// Run one profile, or all of them with --all.
+    Run {
+        name: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Delete a saved profile (archived mail is kept).
+    Remove { name: String },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -177,8 +351,14 @@ fn progress_line(s: &ImportStats, t0: Instant) {
     let n = s.added + s.duplicates + s.new_locations;
     let rate = n as f64 / t0.elapsed().as_secs_f64().max(0.001);
     eprint!(
-        "\r  {} new, {} already archived, {} new locations, {} failed  ({:.0} msg/s)   ",
-        s.added, s.duplicates, s.new_locations, s.failed, rate
+        "\r  {} new, {} already archived, {} new locations, {} failed{}{}  ({:.0} msg/s)   ",
+        s.added,
+        s.duplicates,
+        s.new_locations,
+        s.failed,
+        if s.skipped > 0 { format!(", {} outside date range", s.skipped) } else { String::new() },
+        if s.deleted > 0 { format!(", {} deleted from source", s.deleted) } else { String::new() },
+        rate
     );
     let _ = std::io::stderr().flush();
 }
@@ -214,36 +394,61 @@ fn main() -> Result<()> {
             let mut o = opts(&cli, true);
             o.create = true;
             let mut a = Archive::open(&cli.archive, &o)?;
-            let t0 = Instant::now();
-            let prog = |s: &ImportStats| progress_line(s, t0);
-            let stats = match ic {
-                ImportCmd::Eml { dir, src } => eml::import(&mut a, dir, src, eml::Flavor::Files, prog)?,
-                ImportCmd::Mailstore { dir, src } => eml::import(&mut a, dir, src, eml::Flavor::MailStore, prog)?,
-                ImportCmd::Mbox { path, src } => mbox::import(&mut a, path, src, prog)?,
-                ImportCmd::Pst { path, src } => nea::import::pst::import(&mut a, path, src, prog)?,
-                ImportCmd::Imap { host, port, user, password_env, folder, include_all, src, plaintext } => {
-                    let password = match std::env::var(password_env) {
-                        Ok(p) => p,
-                        Err(_) => rpassword::prompt_password(format!("Password for {user}@{host}: "))?,
-                    };
-                    let cfg = imap::ImapConfig {
-                        host: host.clone(),
-                        port: *port,
-                        user: user.clone(),
-                        password,
-                        src: src.clone(),
-                        folders: folder.clone(),
-                        exclude: if *include_all { vec![] } else { imap::DEFAULT_EXCLUDE.iter().map(|s| s.to_string()).collect() },
-                        plaintext: *plaintext,
-                    };
-                    imap::import(&mut a, &cfg, |f, s| {
-                        eprint!("[{f}] ");
-                        progress_line(s, t0)
-                    })?
+            let p = ic.to_profile("import");
+            run_profile(&mut a, &p)?;
+        }
+        Cmd::Profile(pc) => {
+            let mut o = opts(&cli, !matches!(pc, ProfileCmd::List));
+            o.create = matches!(pc, ProfileCmd::Add { .. });
+            let mut a = Archive::open(&cli.archive, &o)?;
+            match pc {
+                ProfileCmd::Add { name, source } => {
+                    let p = source.to_profile(name);
+                    p.source_window().validate()?;
+                    println!("Saved profile {name:?}: {}", p.describe());
+                    nea::profile::upsert(&a, p)?;
                 }
-            };
-            a.commit()?;
-            report(&stats, t0);
+                ProfileCmd::List => {
+                    let all = nea::profile::load(&a.root)?;
+                    if all.is_empty() {
+                        println!("No profiles yet. Add one with `nea profile add <name> <source> ...`.");
+                    }
+                    for p in all {
+                        let last = p.last_run.map(fmt_date).unwrap_or_else(|| "never".into());
+                        println!("{:24}  last run {:10}  {}", p.name, last, p.describe());
+                    }
+                }
+                ProfileCmd::Run { name, all } => {
+                    let list = match (name, all) {
+                        (Some(n), false) => vec![nea::profile::find(&a.root, n)?],
+                        (None, true) => nea::profile::load(&a.root)?,
+                        _ => bail!("give a profile name or --all"),
+                    };
+                    let mut failed = 0;
+                    for p in &list {
+                        eprintln!("== {} : {}", p.name, p.describe());
+                        if let Err(e) = run_profile(&mut a, p) {
+                            eprintln!("  ! {e:#}");
+                            failed += 1;
+                        }
+                    }
+                    if failed > 0 {
+                        bail!("{failed} of {} profiles failed", list.len());
+                    }
+                }
+                ProfileCmd::Remove { name } => {
+                    if nea::profile::remove(&a, name)? {
+                        println!("Removed profile {name:?}.");
+                    } else {
+                        bail!("no profile named {name:?}");
+                    }
+                }
+            }
+        }
+        Cmd::OutlookFolders => {
+            for (store, path, count) in outlook::list_folders()? {
+                println!("{count:>8}  {store} / {path}");
+            }
         }
         Cmd::Search { query, sort, limit, json } => {
             let a = Archive::open(&cli.archive, &opts(&cli, false))?;
@@ -333,6 +538,27 @@ fn main() -> Result<()> {
             println!("Wrote {messages} demo messages to {}", out.display());
         }
     }
+    Ok(())
+}
+
+fn run_profile(a: &mut Archive, p: &Profile) -> Result<()> {
+    let t0 = Instant::now();
+    let label = match &p.source {
+        Source::Imap(c) => format!("{}@{}", c.user, c.host),
+        Source::Pop3(c) => format!("{}@{}", c.user, c.host),
+        _ => String::new(),
+    };
+    let stats = nea::profile::run(
+        a,
+        p,
+        || Ok(rpassword::prompt_password(format!("Password for {label}: "))?),
+        |f, s| {
+            eprint!("\r[{f}] ");
+            progress_line(s, t0)
+        },
+    )?;
+    a.commit()?;
+    report(&stats, t0);
     Ok(())
 }
 

@@ -5,4 +5,6 @@ pub mod imap;
 pub mod mapi;
 pub mod mbox;
 pub mod msg;
+pub mod outlook;
+pub mod pop3;
 pub mod pst;

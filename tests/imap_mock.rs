@@ -18,6 +18,22 @@ struct Server {
     folders: BTreeMap<String, (u32, BTreeMap<u32, Vec<u8>>)>,
     /// Every UID FETCH of full bodies: (folder, uids)
     body_fetches: Vec<(String, Vec<u32>)>,
+    /// (folder, uid) -> (internal date, flagged, seen). Default: 400 days old, unflagged, seen.
+    meta: BTreeMap<(String, u32), (i64, bool, bool)>,
+    /// \Deleted flags set but not yet expunged.
+    deleted_flags: Vec<(String, u32)>,
+    /// Messages removed by EXPUNGE.
+    expunged: Vec<(String, u32)>,
+}
+
+impl Server {
+    fn meta_of(&self, folder: &str, uid: u32) -> (i64, bool, bool) {
+        self.meta.get(&(folder.to_string(), uid)).copied().unwrap_or((chrono::Utc::now().timestamp() - 400 * 86_400, false, true))
+    }
+}
+
+fn imap_day(s: &str) -> i64 {
+    chrono::NaiveDate::parse_from_str(s, "%d-%b-%Y").unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()
 }
 
 fn msg(id: &str, subject: &str) -> Vec<u8> {
@@ -74,12 +90,41 @@ fn handle(stream: TcpStream, st: Arc<Mutex<Server>>) {
                 .as_bytes(),
             );
         } else if upper.starts_with("UID SEARCH") {
-            // "UID SEARCH UID n:*"
-            let start: u32 = rest.rsplit(' ').next().unwrap().trim_end_matches(":*").parse().unwrap();
+            // Supports: UID a:* | a:b, SINCE d, BEFORE d, UNFLAGGED, SEEN, UNDELETED
+            let toks: Vec<&str> = rest.split_whitespace().skip(2).collect();
             let s = st.lock().unwrap();
             let msgs = &s.folders[&selected].1;
-            let mut uids: Vec<u32> = msgs.keys().copied().filter(|&u| u >= start).collect();
-            if uids.is_empty() {
+            let mut uids: Vec<u32> = msgs.keys().copied().collect();
+            let mut i = 0;
+            let mut uid_range = false;
+            while i < toks.len() {
+                match toks[i].to_uppercase().as_str() {
+                    "UID" => {
+                        i += 1;
+                        let (a, b) = toks[i].split_once(':').unwrap();
+                        let a: u32 = a.parse().unwrap();
+                        let b: u32 = if b == "*" { u32::MAX } else { b.parse().unwrap() };
+                        uids.retain(|&u| u >= a && u <= b);
+                        uid_range = b == u32::MAX;
+                    }
+                    "SINCE" => {
+                        i += 1;
+                        let d = imap_day(toks[i]);
+                        uids.retain(|&u| s.meta_of(&selected, u).0 >= d);
+                    }
+                    "BEFORE" => {
+                        i += 1;
+                        let d = imap_day(toks[i]);
+                        uids.retain(|&u| s.meta_of(&selected, u).0 < d);
+                    }
+                    "UNFLAGGED" => uids.retain(|&u| !s.meta_of(&selected, u).1),
+                    "SEEN" => uids.retain(|&u| s.meta_of(&selected, u).2),
+                    "UNDELETED" => uids.retain(|u| !s.deleted_flags.contains(&(selected.clone(), *u))),
+                    _ => {}
+                }
+                i += 1;
+            }
+            if uids.is_empty() && uid_range && toks.len() == 2 {
                 // Real servers return the highest UID for n:* past the end.
                 uids.extend(msgs.keys().last().copied());
             }
@@ -106,13 +151,44 @@ fn handle(stream: TcpStream, st: Arc<Mutex<Server>>) {
                 } else {
                     String::new()
                 };
+                let flags = if upper.contains("FLAGS") {
+                    let (_, f, seen) = s.meta_of(&selected, *uid);
+                    let mut v = Vec::new();
+                    if seen {
+                        v.push("\\Seen");
+                    }
+                    if f {
+                        v.push("\\Flagged");
+                    }
+                    format!(" FLAGS ({})", v.join(" "))
+                } else {
+                    String::new()
+                };
                 out.extend_from_slice(
-                    format!("* {} FETCH (UID {uid}{labels} RFC822.SIZE {} {section} {{{}}}\r\n", seq + 1, raw.len(), data.len()).as_bytes(),
+                    format!("* {} FETCH (UID {uid}{labels}{flags} RFC822.SIZE {} {section} {{{}}}\r\n", seq + 1, raw.len(), data.len()).as_bytes(),
                 );
                 out.extend_from_slice(data);
                 out.extend_from_slice(b")\r\n");
             }
             out.extend_from_slice(format!("{tag} OK FETCH done\r\n").as_bytes());
+        } else if upper.starts_with("UID STORE") {
+            let parts: Vec<&str> = rest.splitn(4, ' ').collect();
+            let mut s = st.lock().unwrap();
+            for u in parse_set(parts[2]) {
+                s.deleted_flags.push((selected.clone(), u));
+            }
+            out.extend_from_slice(format!("{tag} OK STORE done\r\n").as_bytes());
+        } else if upper.starts_with("EXPUNGE") {
+            let mut s = st.lock().unwrap();
+            let doomed: Vec<(String, u32)> = s.deleted_flags.iter().filter(|(f, _)| *f == selected).cloned().collect();
+            for (f, u) in &doomed {
+                let seq = s.folders[f].1.keys().position(|k| k == u).unwrap() + 1;
+                s.folders.get_mut(f).unwrap().1.remove(u);
+                out.extend_from_slice(format!("* {seq} EXPUNGE\r\n").as_bytes());
+                s.expunged.push((f.clone(), *u));
+            }
+            s.deleted_flags.retain(|(f, _)| *f != selected);
+            out.extend_from_slice(format!("{tag} OK EXPUNGE done\r\n").as_bytes());
         } else if upper.starts_with("LOGOUT") {
             out.extend_from_slice(format!("* BYE\r\n{tag} OK bye\r\n").as_bytes());
             let _ = w.write_all(&out);
@@ -160,6 +236,7 @@ fn imap_incremental_dedupe_and_header_first() {
         folders: vec![],
         exclude: nea::import::imap::DEFAULT_EXCLUDE.iter().map(|s| s.to_string()).collect(),
         plaintext: true,
+        ..Default::default()
     };
     let s1 = import(&mut a, &cfg, |_, _| {}).unwrap();
     assert_eq!(s1.added, 3, "{s1:?}");
@@ -223,6 +300,7 @@ fn gmail_all_mail_once_with_labels() {
         folders: vec![],
         exclude: vec![],
         plaintext: true,
+        ..Default::default()
     };
     let s1 = import(&mut a, &cfg, |_, _| {}).unwrap();
     assert_eq!(s1.added, 3, "{s1:?}");
@@ -232,4 +310,46 @@ fn gmail_all_mail_once_with_labels() {
     assert_eq!(a.index.search("infolder:gmail/INBOX", None, 0, 10).unwrap().total, 1);
     assert_eq!(a.index.search("infolder:gmail/Travel/2024", None, 0, 10).unwrap().total, 1);
     assert_eq!(a.index.search("infolder:gmail/Archived", None, 0, 10).unwrap().total, 1, "unlabelled mail");
+}
+
+#[test]
+fn imap_date_window_and_delete_after_archiving() {
+    let now = chrono::Utc::now().timestamp();
+    let st = Arc::new(Mutex::new(Server::default()));
+    {
+        let mut s = st.lock().unwrap();
+        s.folders.insert(
+            "INBOX".into(),
+            (5, BTreeMap::from([(1, msg("old@x", "Old")), (2, msg("flag@x", "Flagged old")), (3, msg("unread@x", "Unread old")), (4, msg("new@x", "New"))])),
+        );
+        s.meta.insert(("INBOX".into(), 2), (now - 400 * 86_400, true, true));
+        s.meta.insert(("INBOX".into(), 3), (now - 400 * 86_400, false, false));
+        s.meta.insert(("INBOX".into(), 4), (now - 86_400, false, true));
+    }
+    let port = start(st.clone());
+    let d = tempfile::tempdir().unwrap();
+    let mut a = Archive::open(&d.path().join("arch"), &OpenOptions { cache_dir: Some(d.path().join("c")), writer: true, create: true, ..Default::default() }).unwrap();
+    let mut cfg = ImapConfig {
+        host: "127.0.0.1".into(),
+        port,
+        user: "u".into(),
+        password: "p".into(),
+        src: Some("mock".into()),
+        plaintext: true,
+        window: nea::rules::DateWindow { older_than_days: Some(30), ..Default::default() },
+        delete: Some(nea::rules::DeleteRule { older_than_days: 365, include_unread: false }),
+        ..Default::default()
+    };
+    let s1 = import(&mut a, &cfg, |_, _| {}).unwrap();
+    assert_eq!(s1.added, 3, "new mail is outside the 'older than 30 days' window: {s1:?}");
+    assert_eq!(s1.skipped, 1);
+    assert_eq!(s1.deleted, 1, "{s1:?}");
+    assert_eq!(st.lock().unwrap().expunged, vec![("INBOX".to_string(), 1)], "only the old, read, unflagged message");
+
+    // The skipped new message is still picked up once the window allows it.
+    cfg.window = Default::default();
+    cfg.delete = None;
+    let s2 = import(&mut a, &cfg, |_, _| {}).unwrap();
+    assert_eq!(s2.added, 1, "{s2:?}");
+    assert_eq!(a.index.search("", None, 0, 10).unwrap().total, 4);
 }

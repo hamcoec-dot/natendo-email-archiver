@@ -82,6 +82,10 @@ pub struct ImportStats {
     pub added: u64,
     pub new_locations: u64,
     pub duplicates: u64,
+    /// Outside the profile's date window, not archived.
+    pub skipped: u64,
+    /// Deleted from the source after archiving.
+    pub deleted: u64,
     pub failed: u64,
     pub errors: Vec<String>,
 }
@@ -123,6 +127,8 @@ pub struct Archive {
     pub packs: PackReader,
     dirty: HashSet<String>,
     pending: usize,
+    /// When set, imports skip messages dated outside this window.
+    pub window: Option<crate::rules::DateWindow>,
     last_commit: std::time::Instant,
 }
 
@@ -206,6 +212,7 @@ impl Archive {
             packs: PackReader::new(root),
             dirty: HashSet::new(),
             pending: 0,
+            window: None,
             last_commit: std::time::Instant::now(),
         };
         let ver: Option<String> = a
@@ -645,7 +652,14 @@ where
             errs
         });
         let mut n = 0u64;
+        let window = archive.window.clone().filter(|w| !w.is_empty());
         for p in out_rx {
+            if let (Some(w), Some(parsed)) = (&window, &p.parsed) {
+                if !w.contains(parsed.date) {
+                    stats.skipped += 1;
+                    continue;
+                }
+            }
             match archive.add_prepared(p) {
                 Ok(o) => stats.record(o),
                 Err(e) => stats.fail(format!("{e:#}")),
