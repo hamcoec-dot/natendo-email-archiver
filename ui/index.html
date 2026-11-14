@@ -128,11 +128,13 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
     <option value="oldest">Oldest</option>
   </select>
   <button class="btn" id="helpBtn" title="Search syntax">?</button>
+  <button class="btn" id="saveBtn" title="Save this search">☆</button>
   <button class="btn" id="importBtn">Import</button>
+  <button class="btn" id="exportBtn" title="Export the current results">Export</button>
   <button class="btn" id="infoBtn" title="Archive info">Archive</button>
 </header>
 <main>
-  <aside id="facets"></aside>
+  <aside><div id="saved" class="facet"></div><div id="facets"></div></aside>
   <section class="results" id="results"><div class="status"><span class="explain" id="explain">Loading…</span><span id="count"></span></div><div id="hits"></div></section>
   <section class="reader" id="reader"><div class="empty"><h2>Find anything in your mail</h2><p>Type to search. Click a sender, year or folder on the left to narrow results; Shift+click to exclude.</p><p><span class="kbd">/</span> search · <span class="kbd">j</span>/<span class="kbd">k</span> move · <span class="kbd">Esc</span> back</p></div></section>
 </main>
@@ -162,6 +164,19 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
     <p style="color:var(--muted);font-size:13px;margin-top:0">Plain words just work: they match stems ("receipts" finds "receipt") and tolerate typos. Nothing you type is ever an error. Click an example to try it.</p>
     <table id="helpTable"></table>
     <div class="row"><button class="btn" data-close>Close</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="exportModal">
+  <div class="modal">
+    <h2>Export results</h2>
+    <p style="font-size:13px;color:var(--muted);margin-top:0" id="expWhat"></p>
+    <label for="expFormat">Format</label>
+    <select id="expFormat"><option value="eml">.eml files in folders (one per message)</option><option value="mbox">One .mbox file</option></select>
+    <label for="expPath">Destination on this computer</label>
+    <input type="text" id="expPath" placeholder="C:\Users\me\Desktop\Exported mail">
+    <div class="jobs" id="expResult"></div>
+    <div class="row"><button class="btn" data-close>Close</button><button class="btn primary" id="expStart">Export</button></div>
   </div>
 </div>
 
@@ -219,7 +234,8 @@ async function search(append) {
     state.hits = append ? state.hits.concat(data.hits) : data.hits;
     if (!append) { state.sel = -1; $("#results").scrollTop = 0; renderFacets(data.facets); }
     renderHits(append ? data.hits : null);
-    $("#explain").textContent = state.q ? "Searching: " + data.explain : "All mail";
+    $("#explain").textContent = state.q ? (data.relaxed ? "No message has all of those words; showing messages with any of them" : "Searching: " + data.explain) : "All mail";
+    renderSaved();
     $("#explain").title = data.explain;
     $("#count").textContent = `${data.total.toLocaleString()} result${data.total === 1 ? "" : "s"} · ${data.took_ms} ms`;
     writeUrl();
@@ -502,6 +518,45 @@ $("#infoBtn").onclick = async () => {
     <p style="font-size:13px;color:var(--muted)">Archive folder: <code>${esc(d.archive)}</code><br>Search cache (local, rebuildable): <code>${esc(d.cache)}</code><br>Version ${esc(d.version)}</p>
     <h3 style="font-size:14px">Folders</h3><div style="max-height:240px;overflow:auto;font-size:13px">${d.folders.map((f) => `<div>${f.count.toLocaleString()} · ${esc(f.src)} / ${esc(f.folder)}</div>`).join("") || "None yet"}</div>
     <h3 style="font-size:14px">Recent imports</h3><div style="font-size:13px">${d.imports.map((i) => `<div>${esc(fmtDate(i.at))} · ${esc(i.kind)} · ${esc(i.path)} · ${i.added} new, ${i.dupes} dupes, ${i.failed} failed</div>`).join("") || "None yet"}</div>`;
+};
+
+// ---------- export
+$("#exportBtn").onclick = () => {
+  $("#expWhat").textContent = `${state.total.toLocaleString()} message${state.total === 1 ? "" : "s"} matching ${state.q ? "“" + state.q + "”" : "everything"}, exactly as archived.`;
+  $("#expResult").textContent = "";
+  openModal("#exportModal");
+};
+$("#expStart").onclick = async () => {
+  $("#expResult").textContent = "Exporting…";
+  const r = await fetch("/api/export", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ q: state.q, format: $("#expFormat").value, path: $("#expPath").value.trim().replace(/^"|"$/g, "") }) });
+  const j = await r.json();
+  $("#expResult").innerHTML = j.error ? `<span style="color:var(--danger)">${esc(j.error)}</span>` : `✓ ${j.written.toLocaleString()} messages written to ${esc(j.path)}${j.failed ? ` (${j.failed} failed)` : ""}`;
+};
+
+// ---------- saved searches (kept in this browser)
+const SAVED_KEY = "nea.saved";
+function loadSaved() { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch (e) { return []; } }
+function storeSaved(list) { try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch (e) {} }
+function renderSaved() {
+  const list = loadSaved();
+  $("#saveBtn").textContent = state.q && list.includes(state.q) ? "★" : "☆";
+  const box = $("#saved");
+  box.innerHTML = list.length ? "<h3>Saved searches</h3>" : "";
+  list.forEach((q) => {
+    const a = document.createElement("a");
+    a.innerHTML = `<span title="${esc(q)}">${esc(q)}</span><span class="n" title="Remove">✕</span>`;
+    a.onclick = (e) => {
+      if (e.target.classList.contains("n")) { storeSaved(loadSaved().filter((x) => x !== q)); renderSaved(); return; }
+      state.q = q; $("#q").value = q; search(false);
+    };
+    box.appendChild(a);
+  });
+}
+$("#saveBtn").onclick = () => {
+  if (!state.q) return;
+  const list = loadSaved();
+  storeSaved(list.includes(state.q) ? list.filter((x) => x !== state.q) : [state.q, ...list].slice(0, 30));
+  renderSaved();
 };
 
 const initial = readUrl();

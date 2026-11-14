@@ -191,6 +191,9 @@ pub struct SearchResult {
     pub took_ms: u128,
     /// How the query was understood, for the UI's "searching for" line.
     pub explain: String,
+    /// True when nothing matched all words and the results match any of
+    /// them instead.
+    pub relaxed: bool,
 }
 
 impl SearchIndex {
@@ -317,8 +320,26 @@ impl SearchIndex {
 
     pub fn search(&self, q: &str, sort: Option<Sort>, offset: usize, limit: usize) -> Result<SearchResult> {
         let t0 = std::time::Instant::now();
-        let searcher = self.reader.searcher();
         let parsed = query::parse(q);
+        let mut r = self.search_parsed(&parsed, sort, offset, limit)?;
+        if r.total == 0 {
+            if let Some(relaxed) = parsed.relaxed() {
+                let mut r2 = self.search_parsed(&relaxed, sort, offset, limit)?;
+                if r2.total > 0 {
+                    r2.relaxed = true;
+                    r2.explain = format!("no message has all of these; showing any of them: {}", r2.explain);
+                    r = r2;
+                }
+            }
+        }
+        r.took_ms = t0.elapsed().as_millis();
+        Ok(r)
+    }
+
+    fn search_parsed(&self, parsed: &query::Parsed, sort: Option<Sort>, offset: usize, limit: usize) -> Result<SearchResult> {
+        let t0 = std::time::Instant::now();
+        let searcher = self.reader.searcher();
+        let parsed = parsed.clone();
         let compiled = query::compile(&parsed, &self.index, &self.f);
         let sort = sort.unwrap_or(if parsed.has_text_terms() { Sort::Relevance } else { Sort::Newest });
         let limit = limit.clamp(1, 1000);
@@ -374,7 +395,7 @@ impl SearchIndex {
             folder: self.facet_buckets(&searcher, &compiled, facets.2, "f_folder"),
             r#type: self.facet_buckets(&searcher, &compiled, facets.3, "f_type"),
         };
-        Ok(SearchResult { total, hits, facets, took_ms: t0.elapsed().as_millis(), explain: parsed.explain() })
+        Ok(SearchResult { total, hits, facets, took_ms: t0.elapsed().as_millis(), explain: parsed.explain(), relaxed: false })
     }
 
     fn hit(

@@ -260,6 +260,25 @@ impl Parsed {
         self.items.iter().any(text)
     }
 
+    /// The same query with its plain words turned into "any of" (filters
+    /// and phrases stay required). None when there is nothing to relax.
+    pub fn relaxed(&self) -> Option<Parsed> {
+        let words: Vec<String> = self
+            .items
+            .iter()
+            .filter_map(|n| match n {
+                Node::Word(w) => Some(w.clone()),
+                _ => None,
+            })
+            .collect();
+        if words.len() < 2 {
+            return None;
+        }
+        let mut items: Vec<Node> = self.items.iter().filter(|n| !matches!(n, Node::Word(_))).cloned().collect();
+        items.push(Node::Any(words));
+        Some(Parsed { items })
+    }
+
     pub fn explain(&self) -> String {
         fn ex(n: &Node) -> String {
             match n {

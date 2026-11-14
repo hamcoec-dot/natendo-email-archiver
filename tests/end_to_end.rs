@@ -88,6 +88,10 @@ fn search_features() {
     // stray punctuation and bad dates are ignored, not fatal
     assert_eq!(ids(&a, "invoice - &"), 2);
     assert_eq!(ids(&a, "invoice after:someday"), 2);
+    // no message has every word: fall back to any of them, and say so
+    let r = a.index.search("dinner zebra", None, 0, 10).unwrap();
+    assert!(r.relaxed && r.total == 1, "{}", r.explain);
+    assert!(!a.index.search("dinner", None, 0, 10).unwrap().relaxed);
     // recall mode
     assert_eq!(ids(&a, "~heater ~savings"), 2);
     // garbage never errors

@@ -114,6 +114,7 @@ pub fn router(st: S) -> Router {
         .route("/api/contacts", get(contacts))
         .route("/api/import", post(start_import))
         .route("/api/jobs", get(jobs))
+        .route("/api/export", post(export))
         .layer(middleware::from_fn_with_state(st.clone(), host_guard))
         .with_state(st)
 }
@@ -352,4 +353,33 @@ async fn start_import(State(st): State<S>, Json(r): Json<ImportReq>) -> ApiResul
 
 async fn jobs(State(st): State<S>) -> impl IntoResponse {
     Json(st.jobs.lock().unwrap().clone())
+}
+
+#[derive(Deserialize)]
+struct ExportReq {
+    q: String,
+    format: String,
+    path: String,
+}
+
+/// Export the messages matching a query to a folder (.eml files) or a
+/// single .mbox file on this computer.
+async fn export(State(st): State<S>, Json(r): Json<ExportReq>) -> ApiResult<impl IntoResponse> {
+    let out = PathBuf::from(r.path.trim());
+    if r.path.trim().is_empty() || !out.is_absolute() {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "Enter a full path, for example C:\\Users\\me\\Desktop\\Exported mail"}))));
+    }
+    let v = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
+        let a = st.archive.lock().unwrap();
+        let ids = a.index.all_ids(&r.q)?;
+        let (stats, dest) = if r.format == "mbox" {
+            let file = if out.extension().is_some() { out.clone() } else { out.join("export.mbox") };
+            (crate::export::to_mbox(&a, &ids, &file)?, file)
+        } else {
+            (crate::export::to_eml_dir(&a, &ids, &out)?, out.clone())
+        };
+        Ok(json!({"written": stats.written, "failed": stats.failed, "path": dest.display().to_string()}))
+    })
+    .await??;
+    Ok((StatusCode::OK, Json(v)))
 }
