@@ -114,6 +114,7 @@ pub fn router(st: S) -> Router {
         .route("/api/search", get(search))
         .route("/api/message/:id", get(message))
         .route("/api/message/:id/raw", get(message_raw))
+        .route("/api/message/:id/open", post(message_open))
         .route("/api/message/:id/att/:idx", get(attachment))
         .route("/api/thread/:id", get(thread))
         .route("/api/stats", get(stats))
@@ -233,6 +234,25 @@ async fn message(State(st): State<S>, UrlPath(id): UrlPath<String>, Query(mp): Q
     })
     .await??;
     Ok(Json(v).into_response())
+}
+
+/// Open a message in the computer's default mail program (to reply,
+/// forward or print there).
+async fn message_open(State(st): State<S>, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+    if !valid_id(&id) {
+        return Ok((StatusCode::BAD_REQUEST, "bad id").into_response());
+    }
+    let path = tokio::task::spawn_blocking(move || -> Result<PathBuf> {
+        let raw = st.archive.lock().unwrap().read_raw(&id)?;
+        let dir = std::env::temp_dir().join("natendo-open");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.eml", &id[..16]));
+        std::fs::write(&path, raw)?;
+        Ok(path)
+    })
+    .await??;
+    open_url(&path.to_string_lossy());
+    Ok(Json(json!({"opened": path.display().to_string()})).into_response())
 }
 
 async fn message_raw(State(st): State<S>, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {

@@ -379,6 +379,19 @@ enum ProfileCmd {
     },
     /// Delete a saved profile (archived mail is kept).
     Remove { name: String },
+    /// Put a double-click launcher for a profile on the desktop.
+    Shortcut { name: String },
+    /// Run a profile every day at a set time (Windows Task Scheduler;
+    /// prints a crontab line elsewhere).
+    Schedule {
+        name: String,
+        /// Time of day, HH:MM (24-hour).
+        #[arg(long, default_value = "12:30")]
+        daily: String,
+        /// Remove the schedule instead.
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -494,6 +507,18 @@ fn main() -> Result<()> {
                     if failed > 0 {
                         bail!("{failed} of {} profiles failed", list.len());
                     }
+                }
+                ProfileCmd::Shortcut { name } => {
+                    let p = nea::profile::find(&a.root, name)?;
+                    let path = make_shortcut(&a.root, &p.name)?;
+                    println!("Created {}", path.display());
+                    if p.needs_password() && p.password_env.as_deref().and_then(|v| std::env::var(v).ok()).is_none() {
+                        println!("It will ask for the password each time it runs.");
+                    }
+                }
+                ProfileCmd::Schedule { name, daily, remove } => {
+                    let p = nea::profile::find(&a.root, name)?;
+                    schedule(&a.root, &p, daily, *remove)?;
                 }
                 ProfileCmd::Remove { name } => {
                     if nea::profile::remove(&a, name)? {
@@ -696,6 +721,74 @@ fn main() -> Result<()> {
             write_synth_mbox(out, *messages)?;
             println!("Wrote {messages} demo messages to {}", out.display());
         }
+    }
+    Ok(())
+}
+
+/// The command line that runs a profile against this archive.
+fn run_command(root: &std::path::Path, name: &str) -> Result<(PathBuf, Vec<String>)> {
+    if name.contains(['"', '%', '\n', '\r', '`', '$']) {
+        bail!("rename the profile without quotes, %, $ or backticks to make a launcher for it");
+    }
+    let exe = std::env::current_exe()?;
+    Ok((exe, vec!["-a".into(), root.display().to_string(), "profile".into(), "run".into(), name.to_string()]))
+}
+
+fn desktop_dir() -> PathBuf {
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
+    let d = home.join("Desktop");
+    if d.is_dir() {
+        d
+    } else {
+        home
+    }
+}
+
+fn make_shortcut(root: &std::path::Path, name: &str) -> Result<PathBuf> {
+    let (exe, args) = run_command(root, name)?;
+    let quoted: Vec<String> = std::iter::once(exe.display().to_string()).chain(args).map(|a| format!("\"{a}\"")).collect();
+    let file = nea::export::sanitize(&format!("Archive mail - {name}"), 80);
+    let path;
+    if cfg!(windows) {
+        path = desktop_dir().join(format!("{file}.cmd"));
+        std::fs::write(&path, format!("@echo off\r\ntitle Natendo Email Archiver: {name}\r\n{}\r\npause\r\n", quoted.join(" ")))?;
+    } else {
+        let ext = if cfg!(target_os = "macos") { "command" } else { "sh" };
+        path = desktop_dir().join(format!("{file}.{ext}"));
+        std::fs::write(&path, format!("#!/bin/sh\n{}\nprintf 'Press Enter to close'; read _\n", quoted.join(" ")))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    Ok(path)
+}
+
+fn schedule(root: &std::path::Path, p: &Profile, daily: &str, remove: bool) -> Result<()> {
+    let t = chrono::NaiveTime::parse_from_str(daily, "%H:%M").context("--daily takes a time like 12:30")?;
+    let (exe, args) = run_command(root, &p.name)?;
+    let task = format!("Natendo Email Archiver\\{}", p.name);
+    if cfg!(windows) {
+        let status = if remove {
+            std::process::Command::new("schtasks").args(["/Delete", "/TN", &task, "/F"]).status()?
+        } else {
+            if p.needs_password() && p.password_env.as_deref().and_then(|v| std::env::var(v).ok()).is_none() {
+                bail!("a scheduled run can't ask for a password; set the environment variable named in the profile (password_env) for your user first");
+            }
+            let tr = std::iter::once(exe.display().to_string()).chain(args).map(|a| format!("\"{a}\"")).collect::<Vec<_>>().join(" ");
+            std::process::Command::new("schtasks")
+                .args(["/Create", "/TN", &task, "/TR", &tr, "/SC", "DAILY", "/ST", &t.format("%H:%M").to_string(), "/F"])
+                .status()?
+        };
+        if !status.success() {
+            bail!("Task Scheduler refused the change");
+        }
+        println!("{} \"{}\"", if remove { "Removed schedule for" } else { "Scheduled daily at" }, if remove { p.name.clone() } else { format!("{} : {}", t.format("%H:%M"), p.name) });
+    } else {
+        let line = std::iter::once(exe.display().to_string()).chain(args).map(|a| format!("'{}'", a.replace('\'', "'\\''"))).collect::<Vec<_>>().join(" ");
+        println!("Add this line with `crontab -e` to run it daily at {}:", t.format("%H:%M"));
+        println!("{} {} * * * {line}", t.format("%M"), t.format("%H"));
     }
     Ok(())
 }

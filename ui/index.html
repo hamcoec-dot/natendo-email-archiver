@@ -89,6 +89,11 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
 .headers pre { font-size: 12px; background: var(--panel-2); padding: 12px; border-radius: 8px; overflow: auto; max-height: 300px; }
 .thread { padding: 6px 20px 14px; }
 .thread a { display: block; padding: 4px 0; color: var(--accent); cursor: pointer; text-decoration: none; font-size: 13px; }
+@media print {
+  header, aside, .results, .modal-bg, .reader .btn, .reader #back, .reader .thread { display: none !important; }
+  body, main, .reader { display: block !important; height: auto !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
+  .reader .headers { display: none !important; }
+}
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
 .modal { background: var(--panel); border-radius: 14px; padding: 20px 22px; width: min(620px, 100%); max-height: 88vh; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
 .modal h2 { margin: 0 0 12px; font-size: 18px; }
@@ -425,6 +430,8 @@ async function openMessage(id, remote) {
         <button class="btn small" id="hdrBtn">Headers</button>
         <button class="btn small" id="delMsgBtn" title="Remove this message from the archive">Delete</button>
         <a class="btn small" href="/api/message/${id}/raw" style="text-decoration:none">Download .eml</a>
+        <button class="btn small" id="openMailBtn" title="Open in your mail program to reply or forward">Open in mail app</button>
+        <button class="btn small" id="printBtn">Print</button>
       </div>
     </div>
     ${atts}
@@ -447,6 +454,8 @@ async function openMessage(id, remote) {
   let html = hasHtml; html ? showHtml() : showText();
   const t = $("#toggleView"); if (t) t.onclick = () => { html = !html; html ? showHtml() : showText(); t.textContent = html ? "Plain text" : "Formatted"; };
   const rb = $("#remoteBtn"); if (rb) rb.onclick = () => openMessage(id, true);
+  $("#openMailBtn").onclick = async () => { try { await postJson(`/api/message/${id}/open`, {}); } catch (e) { alert(e.message); } };
+  $("#printBtn").onclick = () => window.print();
   $("#delMsgBtn").onclick = async () => {
     if (!confirm("Delete this message from the archive? This cannot be undone (unless you have a backup).")) return;
     try { await postJson("/api/delete", { ids: [id] }); closeReader(); search(false); } catch (e) { alert(e.message); }
