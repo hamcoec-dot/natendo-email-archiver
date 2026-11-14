@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS messages (
     from_name TEXT NOT NULL,
     message_id TEXT NOT NULL,
     thread_key TEXT NOT NULL,
-    att_count INTEGER NOT NULL
+    att_count INTEGER NOT NULL,
+    pack INTEGER NOT NULL,
+    off INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_date ON messages(date);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_key);
@@ -94,21 +96,23 @@ impl Catalog {
             .is_some())
     }
 
-    pub fn insert_message(&self, id: &str, size: usize, p: &ParsedMessage) -> Result<()> {
+    pub fn insert_message(&self, id: &str, loc: [u64; 3], p: &ParsedMessage) -> Result<()> {
         let from = p.from.first().cloned().unwrap_or_default();
         self.conn.execute(
-            "INSERT OR IGNORE INTO messages (id,size,date,subject,from_addr,from_name,message_id,thread_key,att_count)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT OR IGNORE INTO messages (id,size,date,subject,from_addr,from_name,message_id,thread_key,att_count,pack,off)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 id,
-                size as i64,
+                loc[2] as i64,
                 p.date,
                 p.subject,
                 from.email,
                 from.name,
                 p.message_id,
                 p.thread_key(),
-                p.attachments.iter().filter(|a| !a.inline).count() as i64
+                p.attachments.iter().filter(|a| !a.inline).count() as i64,
+                loc[0] as i64,
+                loc[1] as i64
             ],
         )?;
         let mut stmt = self.conn.prepare_cached(
@@ -136,6 +140,23 @@ impl Catalog {
     pub fn locations(&self, id: &str) -> Result<Vec<(String, String)>> {
         let mut stmt = self.conn.prepare_cached("SELECT src, folder FROM locations WHERE id=?1 ORDER BY src, folder")?;
         let rows = stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// [pack, offset, length] of a message.
+    pub fn locate(&self, id: &str) -> Result<Option<[u64; 3]>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT pack, off, size FROM messages WHERE id=?1")?
+            .query_row([id], |r| Ok([r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64]))
+            .optional()?)
+    }
+
+    pub fn all_locations(&self) -> Result<Vec<(String, [u64; 3])>> {
+        let mut stmt = self.conn.prepare("SELECT id, pack, off, size FROM messages ORDER BY pack, off")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get(0)?, [r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64, r.get::<_, i64>(3)? as u64]))
+        })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 

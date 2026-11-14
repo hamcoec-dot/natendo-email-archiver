@@ -8,6 +8,7 @@ pub mod import;
 pub mod index;
 pub mod journal;
 pub mod lock;
+pub mod pack;
 pub mod parse;
 pub mod query;
 pub mod server;

@@ -19,7 +19,16 @@ pub const SEGMENT_MAX: u64 = 64 * 1024 * 1024;
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Entry {
     /// Message `id` (sha256 of its bytes) was found in `source`/`folder`.
-    Msg { id: String, src: String, folder: String, at: i64 },
+    /// `p` = [pack, offset, length] of the message bytes, present on the
+    /// entry that first archives a message.
+    Msg {
+        id: String,
+        src: String,
+        folder: String,
+        at: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        p: Option<[u64; 3]>,
+    },
     /// IMAP sync position for a folder.
     Sync { src: String, folder: String, uidvalidity: u32, last_uid: u32 },
     /// Record of an import run, for the history panel.
@@ -116,8 +125,9 @@ impl Drop for JournalWriter {
 }
 
 /// Read complete entries of segment `path` starting at byte `offset`.
-/// Returns the entries and the offset just past the last complete line.
-pub fn read_from(path: &Path, offset: u64) -> Result<(Vec<Entry>, u64)> {
+/// Returns each entry with the offset just past its line, and the offset
+/// just past the last complete line.
+pub fn read_from(path: &Path, offset: u64) -> Result<(Vec<(Entry, u64)>, u64)> {
     let mut f = File::open(path)?;
     f.seek(SeekFrom::Start(offset))?;
     let mut r = BufReader::with_capacity(1 << 20, f);
@@ -132,7 +142,7 @@ pub fn read_from(path: &Path, offset: u64) -> Result<(Vec<Entry>, u64)> {
         }
         pos += n as u64;
         if let Ok(e) = serde_json::from_slice::<Entry>(&line) {
-            out.push(e);
+            out.push((e, pos));
         }
     }
     Ok((out, pos))
@@ -145,7 +155,7 @@ mod tests {
     #[test]
     fn append_and_replay_incrementally() {
         let dir = tempfile::tempdir().unwrap();
-        let e1 = Entry::Msg { id: "a".into(), src: "s".into(), folder: "INBOX".into(), at: 1 };
+        let e1 = Entry::Msg { id: "a".into(), src: "s".into(), folder: "INBOX".into(), at: 1, p: Some([1, 20, 300]) };
         let e2 = Entry::Sync { src: "s".into(), folder: "INBOX".into(), uidvalidity: 7, last_uid: 42 };
         {
             let mut w = JournalWriter::open(dir.path()).unwrap();
@@ -154,13 +164,13 @@ mod tests {
         }
         let segs = segments(dir.path()).unwrap();
         let (got, off) = read_from(&segs[0].1, 0).unwrap();
-        assert_eq!(got, vec![e1.clone()]);
+        assert_eq!(got.into_iter().map(|x| x.0).collect::<Vec<_>>(), vec![e1.clone()]);
         {
             let mut w = JournalWriter::open(dir.path()).unwrap();
             w.append(&e2).unwrap();
         }
         let (got2, _) = read_from(&segs[0].1, off).unwrap();
-        assert_eq!(got2, vec![e2]);
+        assert_eq!(got2.into_iter().map(|x| x.0).collect::<Vec<_>>(), vec![e2]);
     }
 
     #[test]
@@ -172,7 +182,7 @@ mod tests {
         assert!(got.is_empty());
         assert_eq!(off, 0);
         let mut w = JournalWriter::open(dir.path()).unwrap();
-        w.append(&Entry::Msg { id: "b".into(), src: "s".into(), folder: "f".into(), at: 0 }).unwrap();
+        w.append(&Entry::Msg { id: "b".into(), src: "s".into(), folder: "f".into(), at: 0, p: None }).unwrap();
         w.flush().unwrap();
         let (got, _) = read_from(&seg_path(dir.path(), 1), 0).unwrap();
         assert_eq!(got.len(), 1);

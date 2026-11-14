@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.eml binary
+*.mbox binary
+*.nmp binary
+*.png binary
+*.ico binary
+*.icns binary

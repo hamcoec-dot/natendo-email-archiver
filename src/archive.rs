@@ -26,6 +26,7 @@ use crate::catalog::Catalog;
 use crate::index::{SearchIndex, INDEX_VERSION};
 use crate::journal::{self, Entry, JournalWriter};
 use crate::lock::WriterLock;
+use crate::pack::{self, PackReader, PackWriter};
 use crate::parse::{self, ParsedMessage};
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -114,6 +115,8 @@ pub struct Archive {
     pub index: SearchIndex,
     lock: Option<WriterLock>,
     journal: Option<JournalWriter>,
+    packw: Option<PackWriter>,
+    pub packs: PackReader,
     dirty: HashSet<String>,
     pending: usize,
 }
@@ -143,7 +146,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     {
         let mut f = fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         f.write_all(data)?;
-        f.sync_data()?;
+        if std::env::var_os("NEA_NOSYNC").is_none() { f.sync_data()?; }
     }
     fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
     Ok(())
@@ -182,6 +185,7 @@ impl Archive {
 
         let lock = if opts.writer { Some(WriterLock::acquire(root, opts.break_lock)?) } else { None };
         let journal = if opts.writer { Some(JournalWriter::open(root)?) } else { None };
+        let packw = if opts.writer { Some(PackWriter::open(root)?) } else { None };
 
         let catalog = Catalog::open(&cache.join("catalog.sqlite"))?;
         let index = SearchIndex::open(&cache.join("index"))?;
@@ -193,6 +197,8 @@ impl Archive {
             index,
             lock,
             journal,
+            packw,
+            packs: PackReader::new(root),
             dirty: HashSet::new(),
             pending: 0,
         };
@@ -233,16 +239,15 @@ impl Archive {
         self.lock.is_some()
     }
 
-    pub fn message_path(&self, id: &str) -> PathBuf {
-        message_path(&self.root, id)
+    pub fn read_raw(&self, id: &str) -> Result<Vec<u8>> {
+        pack::check_id(id)?;
+        let [n, off, len] = self.catalog.locate(id)?.with_context(|| format!("message {id} is not in the archive"))?;
+        self.packs.read(n as u32, off, len)
     }
 
-    pub fn read_raw(&self, id: &str) -> Result<Vec<u8>> {
-        if id.len() != 64 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
-            bail!("invalid message id");
-        }
-        let p = self.message_path(id);
-        fs::read(&p).with_context(|| format!("reading {}", p.display()))
+    /// Pack file, offset and length of a message (for tools and tests).
+    pub fn locate(&self, id: &str) -> Result<Option<(PathBuf, u64, u64)>> {
+        Ok(self.catalog.locate(id)?.map(|[n, off, len]| (pack::pack_path(&self.root, n as u32), off, len)))
     }
 
     /// Hash and (if new) parse a message. Pure; safe to call from any thread.
@@ -268,17 +273,16 @@ impl Archive {
         let folders: Vec<String> = if p.folders.is_empty() { vec![String::new()] } else { p.folders };
         let exists = self.catalog.has_message(&p.id)?;
         let mut outcome = if exists { AddOutcome::Duplicate } else { AddOutcome::New };
+        let mut ploc = None;
         if !exists {
-            let path = self.message_path(&p.id);
-            if !path.exists() {
-                fs::create_dir_all(path.parent().unwrap())?;
-                write_atomic(&path, &p.raw)?;
-            }
+            let (n, off) = self.packw.as_mut().unwrap().append(&p.id, &p.raw)?;
+            let loc = [n as u64, off, p.raw.len() as u64];
+            ploc = Some(loc);
             let parsed = match p.parsed {
                 Some(x) => x,
                 None => parse::parse(&p.raw),
             };
-            self.catalog.insert_message(&p.id, p.raw.len(), &parsed)?;
+            self.catalog.insert_message(&p.id, loc, &parsed)?;
             let mut locs = Vec::new();
             for f in &folders {
                 self.catalog.add_location(&p.id, &p.src, f, now)?;
@@ -292,7 +296,8 @@ impl Archive {
         for f in &folders {
             let new_loc = exists && self.catalog.add_location(&p.id, &p.src, f, now)?;
             if !exists || new_loc {
-                j.append(&Entry::Msg { id: p.id.clone(), src: p.src.clone(), folder: f.clone(), at: now })?;
+                // The first entry for a new message carries where its bytes are.
+                j.append(&Entry::Msg { id: p.id.clone(), src: p.src.clone(), folder: f.clone(), at: now, p: ploc.take() })?;
             }
             if new_loc {
                 outcome = AddOutcome::NewLocation;
@@ -326,7 +331,7 @@ impl Archive {
         }
         let now = chrono::Utc::now().timestamp();
         if self.catalog.add_location(id, src, folder, now)? {
-            j.append(&Entry::Msg { id: id.into(), src: src.into(), folder: folder.into(), at: now })?;
+            j.append(&Entry::Msg { id: id.into(), src: src.into(), folder: folder.into(), at: now, p: None })?;
             self.dirty.insert(id.to_string());
             Ok(AddOutcome::NewLocation)
         } else {
@@ -351,6 +356,10 @@ impl Archive {
     /// Durably persist everything added so far: journal first (the source of
     /// truth), then the local cache.
     pub fn commit(&mut self) -> Result<()> {
+        // Message bytes must be durable before the journal points at them.
+        if let Some(w) = self.packw.as_mut() {
+            w.sync()?;
+        }
         if let Some(j) = self.journal.as_mut() {
             j.flush()?;
         }
@@ -380,34 +389,49 @@ impl Archive {
     }
 
     /// Apply journal entries written since this cache last looked (by this
-    /// machine or another one sharing the archive folder).
+    /// machine or another one sharing the archive folder). The catalog
+    /// commits only after the index does, so a failure leaves nothing half
+    /// applied.
     pub fn sync_from_journal(&mut self) -> Result<u64> {
         let mut applied = 0u64;
-        let mut touched = false;
-        for (seg, path) in journal::segments(&self.root)? {
+        let mut offsets: Vec<(u32, u64)> = Vec::new();
+        let mut began = false;
+        'segs: for (seg, path) in journal::segments(&self.root)? {
             let off = self.catalog.applied_offset(seg)?;
             let len = fs::metadata(&path)?.len();
             if len <= off {
                 continue;
             }
-            let (entries, new_off) = journal::read_from(&path, off)?;
+            let (entries, _) = journal::read_from(&path, off)?;
             if entries.is_empty() {
                 continue;
             }
-            touched = true;
-            self.catalog.begin()?;
-            for e in entries {
+            if !began {
+                if self.catalog.conn.is_autocommit() {
+                    self.catalog.begin()?;
+                }
+                began = true;
+            }
+            let mut done_to = off;
+            for (e, end) in entries {
                 match e {
-                    Entry::Msg { id, src, folder, at } => {
+                    Entry::Msg { id, src, folder, at, p } => {
                         if !self.catalog.has_message(&id)? {
-                            let raw = match self.read_raw(&id) {
-                                Ok(r) => r,
-                                Err(_) => continue, // file not yet visible (NAS lag); retried next sync
-                            };
-                            let parsed = parse::parse(&raw);
-                            self.catalog.insert_message(&id, raw.len(), &parsed)?;
-                            self.catalog.add_location(&id, &src, &folder, at)?;
-                            self.dirty.insert(id);
+                            if let Some(loc) = p {
+                                let raw = match self.packs.read(loc[0] as u32, loc[1], loc[2]) {
+                                    Ok(r) => r,
+                                    Err(_) => {
+                                        // Bytes not visible yet (NAS caching lag):
+                                        // stop here and retry from this entry later.
+                                        offsets.push((seg, done_to));
+                                        break 'segs;
+                                    }
+                                };
+                                let parsed = parse::parse(&raw);
+                                self.catalog.insert_message(&id, loc, &parsed)?;
+                                self.catalog.add_location(&id, &src, &folder, at)?;
+                                self.dirty.insert(id);
+                            }
                         } else if self.catalog.add_location(&id, &src, &folder, at)? {
                             self.dirty.insert(id);
                         }
@@ -419,51 +443,62 @@ impl Archive {
                         self.catalog.record_import(&kind, &path, at, added, dupes, failed)?;
                     }
                 }
+                done_to = end;
                 applied += 1;
             }
-            self.catalog.set_applied_offset(seg, new_off)?;
-            self.catalog.commit()?;
+            offsets.push((seg, done_to));
         }
-        if touched {
-            // New-to-this-cache messages need a full index doc, which
-            // reindex() builds from the file and catalog locations.
-            let dirty: Vec<String> = self.dirty.drain().collect();
-            for id in &dirty {
-                self.reindex(id)?;
-            }
-            self.index.commit()?;
-            if !self.is_writer() {
-                self.index.close_writer()?;
-            }
+        if !began {
+            return Ok(0);
         }
+        let dirty: Vec<String> = self.dirty.drain().collect();
+        self.reindex_many(&dirty)?;
+        self.index.commit()?;
+        if !self.is_writer() {
+            self.index.close_writer()?;
+        }
+        for (seg, off) in offsets {
+            self.catalog.set_applied_offset(seg, off)?;
+        }
+        self.catalog.commit()?;
         Ok(applied)
     }
 
-    /// Drop and rebuild the search index from the message files.
-    pub fn rebuild_index(&mut self, mut progress: impl FnMut(usize, usize)) -> Result<()> {
-        self.index.clear()?;
-        self.index.commit()?;
-        let ids = self.catalog.all_ids()?;
-        let total = ids.len();
-        let (tx, rx) = mpsc::sync_channel::<(String, Vec<u8>, ParsedMessage)>(256);
-        let root = self.root.clone();
-        let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8);
-        let chunks: Vec<Vec<String>> = {
-            let mut c = vec![Vec::new(); workers];
-            for (i, id) in ids.into_iter().enumerate() {
-                c[i % workers].push(id);
+    /// Re-index messages, parsing in parallel when there are many.
+    fn reindex_many(&mut self, ids: &[String]) -> Result<()> {
+        if ids.len() < 64 {
+            for id in ids {
+                self.reindex(id)?;
             }
-            c
-        };
+            return Ok(());
+        }
+        let mut work = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(loc) = self.catalog.locate(id)? {
+                work.push((id.clone(), loc));
+            }
+        }
+        self.index_parallel(work, true, |_, _| {})
+    }
+
+    fn index_parallel(&mut self, work: Vec<(String, [u64; 3])>, replace: bool, mut progress: impl FnMut(usize, usize)) -> Result<()> {
+        let total = work.len();
+        let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8);
+        let (tx, rx) = mpsc::sync_channel::<(String, usize, ParsedMessage)>(256);
+        let mut chunks: Vec<Vec<(String, [u64; 3])>> = vec![Vec::new(); workers];
+        for (i, w) in work.into_iter().enumerate() {
+            chunks[i % workers].push(w);
+        }
+        let packs = self.packs.clone();
         std::thread::scope(|s| -> Result<()> {
             for chunk in chunks {
                 let tx = tx.clone();
-                let root = root.clone();
+                let packs = packs.clone();
                 s.spawn(move || {
-                    for id in chunk {
-                        if let Ok(raw) = fs::read(message_path(&root, &id)) {
+                    for (id, [n, off, len]) in chunk {
+                        if let Ok(raw) = packs.read(n as u32, off, len) {
                             let p = parse::parse(&raw);
-                            if tx.send((id, raw, p)).is_err() {
+                            if tx.send((id, raw.len(), p)).is_err() {
                                 break;
                             }
                         }
@@ -472,10 +507,10 @@ impl Archive {
             }
             drop(tx);
             let mut n = 0;
-            for (id, raw, p) in rx {
+            for (id, size, p) in rx {
                 let locs = self.catalog.locations(&id)?;
-                let doc = self.index.build_doc(&id, raw.len(), &p, &locs);
-                self.index.upsert(doc, &id, false)?;
+                let doc = self.index.build_doc(&id, size, &p, &locs);
+                self.index.upsert(doc, &id, replace)?;
                 n += 1;
                 if n % 1000 == 0 {
                     progress(n, total);
@@ -483,7 +518,15 @@ impl Archive {
             }
             progress(n, total);
             Ok(())
-        })?;
+        })
+    }
+
+    /// Drop and rebuild the search index from the message packs.
+    pub fn rebuild_index(&mut self, progress: impl FnMut(usize, usize)) -> Result<()> {
+        self.index.clear()?;
+        self.index.commit()?;
+        let work = self.catalog.all_locations()?;
+        self.index_parallel(work, false, progress)?;
         self.index.commit()?;
         if !self.is_writer() {
             self.index.close_writer()?;
@@ -491,34 +534,29 @@ impl Archive {
         Ok(())
     }
 
-    /// Re-hash every message file and compare with its name and the catalog.
+    /// Re-hash every archived message, and scan packs for records the
+    /// catalog does not know about.
     pub fn verify(&self, mut progress: impl FnMut(u64)) -> Result<VerifyReport> {
         let mut r = VerifyReport::default();
-        let known: HashSet<String> = self.catalog.all_ids()?.into_iter().collect();
-        let mut seen = HashSet::new();
-        for e in walkdir::WalkDir::new(self.root.join("messages")).into_iter().filter_map(|e| e.ok()) {
-            if !e.file_type().is_file() {
-                continue;
-            }
-            let name = e.file_name().to_string_lossy();
-            let Some(id) = name.strip_suffix(".eml") else {
-                r.unknown_files += 1;
-                continue;
-            };
+        for (id, [n, off, len]) in self.catalog.all_locations()? {
             r.checked += 1;
-            let data = fs::read(e.path())?;
-            if sha256_hex(&data) == id {
-                r.ok += 1;
-            } else {
-                r.corrupt.push(id.to_string());
+            match self.packs.read(n as u32, off, len) {
+                Ok(data) if sha256_hex(&data) == id => r.ok += 1,
+                Ok(_) => r.corrupt.push(id),
+                Err(_) => r.missing.push(id),
             }
-            seen.insert(id.to_string());
             if r.checked % 1000 == 0 {
                 progress(r.checked);
             }
         }
-        r.missing = known.difference(&seen).cloned().collect();
-        r.missing.sort();
+        let known: HashSet<String> = self.catalog.all_ids()?.into_iter().collect();
+        for (_, path) in pack::list_packs(&self.root)? {
+            for (id, _, _) in pack::scan(&path)? {
+                if !known.contains(&id) {
+                    r.unknown_files += 1;
+                }
+            }
+        }
         Ok(r)
     }
 }
@@ -529,10 +567,6 @@ impl Drop for Archive {
             let _ = self.commit();
         }
     }
-}
-
-pub fn message_path(root: &Path, id: &str) -> PathBuf {
-    root.join("messages").join(&id[..2]).join(&id[2..4]).join(format!("{id}.eml"))
 }
 
 /// Run `prepare` on worker threads and feed results to `archive.add_prepared`
