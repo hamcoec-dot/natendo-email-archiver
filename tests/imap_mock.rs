@@ -10,6 +10,10 @@ use nea::import::imap::{import, ImapConfig};
 
 #[derive(Default)]
 struct Server {
+    /// Behave like Gmail: X-GM-EXT-1, an \All folder, X-GM-LABELS.
+    gmail: bool,
+    /// uid -> labels (Gmail mode, All Mail only)
+    labels: BTreeMap<u32, Vec<String>>,
     /// folder -> (uidvalidity, uid -> raw)
     folders: BTreeMap<String, (u32, BTreeMap<u32, Vec<u8>>)>,
     /// Every UID FETCH of full bodies: (folder, uids)
@@ -44,12 +48,16 @@ fn handle(stream: TcpStream, st: Arc<Mutex<Server>>) {
         let (tag, rest) = l.split_once(' ').unwrap_or((l, ""));
         let upper = rest.to_uppercase();
         let mut out = Vec::new();
-        if upper.starts_with("LOGIN") {
+        if upper.starts_with("CAPABILITY") {
+            let ext = if st.lock().unwrap().gmail { " X-GM-EXT-1" } else { "" };
+            out.extend_from_slice(format!("* CAPABILITY IMAP4rev1{ext}\r\n{tag} OK done\r\n").as_bytes());
+        } else if upper.starts_with("LOGIN") {
             out.extend_from_slice(format!("{tag} OK LOGIN completed\r\n").as_bytes());
         } else if upper.starts_with("LIST") {
             let s = st.lock().unwrap();
             for name in s.folders.keys() {
-                out.extend_from_slice(format!("* LIST (\\HasNoChildren) \"/\" \"{name}\"\r\n").as_bytes());
+                let attr = if s.gmail && name == "[Gmail]/All Mail" { "\\HasNoChildren \\All" } else { "\\HasNoChildren" };
+                out.extend_from_slice(format!("* LIST ({attr}) \"/\" \"{name}\"\r\n").as_bytes());
             }
             out.extend_from_slice(b"* LIST (\\Noselect) \"/\" \"Parent\"\r\n");
             out.extend_from_slice(format!("{tag} OK LIST completed\r\n").as_bytes());
@@ -91,8 +99,15 @@ fn handle(stream: TcpStream, st: Arc<Mutex<Server>>) {
                     continue;
                 }
                 let (section, data) = if header_only { ("BODY[HEADER]", header_of(raw)) } else { ("BODY[]", &raw[..]) };
+                let labels = if upper.contains("X-GM-LABELS") {
+                    let l = s.labels.get(uid).cloned().unwrap_or_default();
+                    let l: Vec<String> = l.iter().map(|x| if x.starts_with('\\') { x.clone() } else { format!("\"{x}\"") }).collect();
+                    format!(" X-GM-LABELS ({})", l.join(" "))
+                } else {
+                    String::new()
+                };
                 out.extend_from_slice(
-                    format!("* {} FETCH (UID {uid} RFC822.SIZE {} {section} {{{}}}\r\n", seq + 1, raw.len(), data.len()).as_bytes(),
+                    format!("* {} FETCH (UID {uid}{labels} RFC822.SIZE {} {section} {{{}}}\r\n", seq + 1, raw.len(), data.len()).as_bytes(),
                 );
                 out.extend_from_slice(data);
                 out.extend_from_slice(b")\r\n");
@@ -180,4 +195,41 @@ fn imap_incremental_dedupe_and_header_first() {
     let s4 = import(&mut a, &cfg, |_, _| {}).unwrap();
     assert_eq!(s4.added, 0);
     assert_eq!(a.index.search("", None, 0, 10).unwrap().total, 4);
+}
+
+#[test]
+fn gmail_all_mail_once_with_labels() {
+    let st = Arc::new(Mutex::new(Server { gmail: true, ..Default::default() }));
+    {
+        let mut s = st.lock().unwrap();
+        s.folders.insert("INBOX".into(), (1, BTreeMap::from([(1, msg("a@x", "Alpha"))])));
+        s.folders.insert("Travel".into(), (2, BTreeMap::from([(1, msg("b@x", "Bravo"))])));
+        s.folders.insert(
+            "[Gmail]/All Mail".into(),
+            (3, BTreeMap::from([(10, msg("a@x", "Alpha")), (11, msg("b@x", "Bravo")), (12, msg("c@x", "Charlie"))])),
+        );
+        s.labels.insert(10, vec!["\\Inbox".into(), "\\Important".into()]);
+        s.labels.insert(11, vec!["Travel/2024".into()]);
+    }
+    let port = start(st.clone());
+    let d = tempfile::tempdir().unwrap();
+    let mut a = Archive::open(&d.path().join("arch"), &OpenOptions { cache_dir: Some(d.path().join("c")), writer: true, create: true, ..Default::default() }).unwrap();
+    let cfg = ImapConfig {
+        host: "127.0.0.1".into(),
+        port,
+        user: "u".into(),
+        password: "p".into(),
+        src: Some("gmail".into()),
+        folders: vec![],
+        exclude: vec![],
+        plaintext: true,
+    };
+    let s1 = import(&mut a, &cfg, |_, _| {}).unwrap();
+    assert_eq!(s1.added, 3, "{s1:?}");
+    let fetched: Vec<String> = st.lock().unwrap().body_fetches.iter().map(|f| f.0.clone()).collect();
+    assert!(fetched.iter().all(|f| f == "[Gmail]/All Mail"), "only All Mail downloaded: {fetched:?}");
+    assert_eq!(a.index.search("label:important", None, 0, 10).unwrap().total, 1);
+    assert_eq!(a.index.search("infolder:gmail/INBOX", None, 0, 10).unwrap().total, 1);
+    assert_eq!(a.index.search("infolder:gmail/Travel/2024", None, 0, 10).unwrap().total, 1);
+    assert_eq!(a.index.search("infolder:gmail/Archived", None, 0, 10).unwrap().total, 1, "unlabelled mail");
 }

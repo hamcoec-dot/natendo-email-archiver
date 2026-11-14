@@ -70,7 +70,9 @@ pub fn import(archive: &mut Archive, cfg: &ImapConfig, mut progress: impl FnMut(
         }
         folders.push((n.name().to_string(), attrs.iter().any(|a| a == "All")));
     }
-    let gmail = is_gmail(&cfg.host) && folders.iter().any(|f| f.1);
+    // Gmail (or a server offering Gmail's extension) with an \All folder.
+    let gm_ext = session.capabilities().map(|c| c.has_str("X-GM-EXT-1")).unwrap_or(false);
+    let gmail = (is_gmail(&cfg.host) || gm_ext) && folders.iter().any(|f| f.1);
     let selected: Vec<(String, bool)> = if !cfg.folders.is_empty() {
         folders.into_iter().filter(|(n, _)| cfg.folders.iter().any(|w| w.eq_ignore_ascii_case(n))).collect()
     } else if gmail {
