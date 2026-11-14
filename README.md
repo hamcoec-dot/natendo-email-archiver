@@ -172,4 +172,4 @@ Source map: `src/archive.rs` (storage and sync), `src/pack.rs`, `src/journal.rs`
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE). Not affiliated with MailStore or any email provider.
+Apache License 2.0. See [LICENSE](LICENSE). Current status and open decisions: [docs/STATUS.md](docs/STATUS.md). Not affiliated with MailStore or any email provider.
