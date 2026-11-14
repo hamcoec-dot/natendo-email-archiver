@@ -143,6 +143,18 @@ impl Catalog {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// Forget a message (and its folders). Returns true if it was there.
+    pub fn delete_message(&self, id: &str) -> Result<bool> {
+        self.conn.execute("DELETE FROM locations WHERE id=?1", [id])?;
+        Ok(self.conn.execute("DELETE FROM messages WHERE id=?1", [id])? > 0)
+    }
+
+    /// Point a message at its new pack location (after compaction).
+    pub fn set_location(&self, id: &str, loc: [u64; 3]) -> Result<()> {
+        self.conn.execute("UPDATE messages SET pack=?2, off=?3 WHERE id=?1", params![id, loc[0] as i64, loc[1] as i64])?;
+        Ok(())
+    }
+
     /// When a message first entered the archive (earliest location).
     pub fn archived_at(&self, id: &str) -> Result<i64> {
         let mut stmt = self.conn.prepare_cached("SELECT COALESCE(MIN(at), 0) FROM locations WHERE id=?1")?;

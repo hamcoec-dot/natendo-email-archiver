@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 
 pub const PACK_MAX: u64 = 128 * 1024 * 1024;
-const MAGIC: &str = "NEAMSG1";
+pub const MAGIC: &str = "NEAMSG1";
 
 pub fn pack_dir(root: &Path) -> PathBuf {
     root.join("messages")
@@ -105,6 +105,17 @@ impl PackWriter {
         self.len = off + raw.len() as u64 + 1;
         self.dirty = true;
         Ok((self.num, off))
+    }
+
+    /// Start a new pack file after the highest existing one.
+    pub fn rotate(&mut self) -> Result<u32> {
+        self.sync()?;
+        let last = list_packs(&self.root)?.last().map(|p| p.0).unwrap_or(0);
+        self.num = last.max(self.num) + 1;
+        let (out, len) = Self::open_num(&self.root, self.num)?;
+        self.out = out;
+        self.len = len;
+        Ok(self.num)
     }
 
     /// Make appended messages durable. Must happen before the journal

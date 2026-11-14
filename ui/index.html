@@ -423,6 +423,7 @@ async function openMessage(id, remote) {
         ${m.thread_count > 1 ? `<button class="btn small" id="threadBtn">Conversation (${m.thread_count})</button>` : ""}
         <button class="btn small" id="fromBtn">More from sender</button>
         <button class="btn small" id="hdrBtn">Headers</button>
+        <button class="btn small" id="delMsgBtn" title="Remove this message from the archive">Delete</button>
         <a class="btn small" href="/api/message/${id}/raw" style="text-decoration:none">Download .eml</a>
       </div>
     </div>
@@ -446,6 +447,10 @@ async function openMessage(id, remote) {
   let html = hasHtml; html ? showHtml() : showText();
   const t = $("#toggleView"); if (t) t.onclick = () => { html = !html; html ? showHtml() : showText(); t.textContent = html ? "Plain text" : "Formatted"; };
   const rb = $("#remoteBtn"); if (rb) rb.onclick = () => openMessage(id, true);
+  $("#delMsgBtn").onclick = async () => {
+    if (!confirm("Delete this message from the archive? This cannot be undone (unless you have a backup).")) return;
+    try { await postJson("/api/delete", { ids: [id] }); closeReader(); search(false); } catch (e) { alert(e.message); }
+  };
   $("#hdrBtn").onclick = () => { const h = $("#hdrs"); h.style.display = h.style.display === "none" ? "" : "none"; };
   $("#fromBtn").onclick = () => { const e = m.from[0] && m.from[0].email; if (e) { state.q = "sender:" + e; $("#q").value = state.q; search(false); } };
   const tb = $("#threadBtn"); if (tb) tb.onclick = () => showThread(id);
@@ -688,7 +693,31 @@ $("#infoBtn").onclick = async () => {
     ${s.first_date ? `<p>From ${esc(fmtDate(s.first_date))} to ${esc(fmtDate(s.last_date))}</p>` : ""}
     <p style="font-size:13px;color:var(--muted)">Archive folder: <code>${esc(d.archive)}</code><br>Search cache (local, rebuildable): <code>${esc(d.cache)}</code><br>Version ${esc(d.version)}</p>
     <h3 style="font-size:14px">Folders</h3><div style="max-height:240px;overflow:auto;font-size:13px">${d.folders.map((f) => `<div>${f.count.toLocaleString()} · ${esc(f.src)} / ${esc(f.folder)}</div>`).join("") || "None yet"}</div>
-    <h3 style="font-size:14px">Recent imports</h3><div style="font-size:13px">${d.imports.map((i) => `<div>${esc(fmtDate(i.at))} · ${esc(i.kind)} · ${esc(i.path)} · ${i.added} new, ${i.dupes} dupes, ${i.failed} failed</div>`).join("") || "None yet"}</div>`;
+    <h3 style="font-size:14px">Recent imports</h3><div style="font-size:13px">${d.imports.map((i) => `<div>${esc(fmtDate(i.at))} · ${esc(i.kind)} · ${esc(i.path)} · ${i.added} new, ${i.dupes} dupes, ${i.failed} failed</div>`).join("") || "None yet"}</div>
+    <h3 style="font-size:14px">Backup</h3>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 6px">Copies the archive folder to another drive or a NAS. After the first time, only new mail is copied. The backup opens like any archive.</p>
+    <div style="display:flex;gap:8px"><input type="text" id="bakPath" placeholder="E:\\Mail backup" style="flex:1"><button class="btn" id="bakBtn">Back up now</button></div>
+    <h3 style="font-size:14px">Maintenance</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="compactBtn" title="Removes deleted messages from the archive folder for good">Reclaim space from deleted mail</button><button class="btn" id="delResultsBtn">Delete current search results…</button></div>
+    <div class="jobs" id="maintResult"></div>`;
+  try { const b = localStorage.getItem("nea.backup"); if (b) $("#bakPath").value = b; } catch (e) {}
+  const out = (h) => $("#maintResult").innerHTML = h;
+  $("#bakBtn").onclick = async () => {
+    const path = $("#bakPath").value.trim().replace(/^"|"$/g, "");
+    if (!path) return;
+    try { localStorage.setItem("nea.backup", path); } catch (e) {}
+    out("Backing up…");
+    try { const r = await postJson("/api/backup", { path }); out(`✓ Backup up to date: ${r.copied} files copied, ${r.appended} updated, ${fmtSize(r.bytes)} written`); } catch (e) { out(`<span style="color:var(--danger)">${esc(e.message)}</span>`); }
+  };
+  $("#compactBtn").onclick = async () => {
+    out("Compacting…");
+    try { const r = await postJson("/api/compact", {}); out(`✓ ${r.moved.toLocaleString()} messages moved, ${r.packs_removed} old files removed, ${fmtSize(r.bytes_before)} → ${fmtSize(r.bytes_after)}${r.warnings.length ? "<br>" + r.warnings.map(esc).join("<br>") : ""}`); } catch (e) { out(`<span style="color:var(--danger)">${esc(e.message)}</span>`); }
+  };
+  $("#delResultsBtn").onclick = async () => {
+    if (!state.q) { out("Search for the messages to delete first."); return; }
+    if (!confirm(`Delete all ${state.total.toLocaleString()} messages matching “${state.q}” from the archive? This cannot be undone (unless you have a backup).`)) return;
+    try { const r = await postJson("/api/delete", { q: state.q }); out(`✓ ${r.deleted.toLocaleString()} messages deleted. Use “Reclaim space” to remove them from the folder for good.`); search(false); } catch (e) { out(`<span style="color:var(--danger)">${esc(e.message)}</span>`); }
+  };
 };
 
 // ---------- export

@@ -1,6 +1,7 @@
 //! Natendo Email Archiver core library.
 
 pub mod archive;
+pub mod backup;
 pub mod catalog;
 pub mod export;
 pub mod extract;

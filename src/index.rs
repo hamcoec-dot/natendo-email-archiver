@@ -302,6 +302,12 @@ impl SearchIndex {
         Ok(())
     }
 
+    pub fn delete(&mut self, id: &str) -> Result<()> {
+        let idf = self.f.id;
+        self.writer()?.delete_term(Term::from_field_text(idf, id));
+        Ok(())
+    }
+
     pub fn commit(&mut self) -> Result<()> {
         if let Some(w) = self.writer.as_mut() {
             w.commit()?;

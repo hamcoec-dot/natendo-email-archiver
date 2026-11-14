@@ -122,6 +122,17 @@ enum Cmd {
         #[arg(long)]
         plaintext: bool,
     },
+    /// Remove messages matching a query from the archive (asks first).
+    Delete {
+        query: Vec<String>,
+        /// Don't ask.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Reclaim space from deleted messages by rewriting message packs.
+    Compact,
+    /// Back up the archive folder to another folder (incremental after the first run).
+    Backup { dest: PathBuf },
     /// Re-hash every message file and report missing or corrupt ones.
     Verify,
     /// Rebuild the local search index from the archive folder.
@@ -586,6 +597,58 @@ fn main() -> Result<()> {
             for e in &s.errors {
                 eprintln!("  ! {e}");
             }
+        }
+        Cmd::Delete { query, yes } => {
+            let q = query.join(" ");
+            if q.trim().is_empty() {
+                bail!("give a search that selects the messages to delete");
+            }
+            let mut a = Archive::open(&cli.archive, &opts(&cli, true))?;
+            let ids = a.index.all_ids(&q)?;
+            if ids.is_empty() {
+                println!("No messages match.");
+                return Ok(());
+            }
+            if !*yes {
+                eprint!("Delete {} messages matching {q:?} from the archive? Type yes: ", ids.len());
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if answer.trim() != "yes" {
+                    println!("Nothing deleted.");
+                    return Ok(());
+                }
+            }
+            let n = a.delete_messages(&ids)?;
+            println!("Deleted {n} messages. Run `nea compact` to reclaim their space.");
+        }
+        Cmd::Compact => {
+            let mut a = Archive::open(&cli.archive, &opts(&cli, true))?;
+            let r = a.compact(|d, t| eprint!("\r  {d}/{t} messages moved"))?;
+            eprintln!();
+            println!(
+                "{} messages moved, {} packs removed, {:.1} MB -> {:.1} MB",
+                r.moved,
+                r.packs_removed,
+                r.bytes_before as f64 / 1e6,
+                r.bytes_after as f64 / 1e6
+            );
+            for w in &r.warnings {
+                eprintln!("  ! {w}");
+            }
+        }
+        Cmd::Backup { dest } => {
+            let t0 = Instant::now();
+            let r = nea::backup::backup(&cli.archive, dest, |r| eprint!("\r  {} files copied, {} updated, {:.1} MB   ", r.copied, r.appended, r.bytes as f64 / 1e6))?;
+            eprintln!();
+            println!(
+                "Backup up to date in {:.1}s: {} copied, {} updated, {} unchanged, {} removed, {:.1} MB written",
+                t0.elapsed().as_secs_f64(),
+                r.copied,
+                r.appended,
+                r.unchanged,
+                r.removed,
+                r.bytes as f64 / 1e6
+            );
         }
         Cmd::Verify => {
             let a = Archive::open(&cli.archive, &opts(&cli, false))?;

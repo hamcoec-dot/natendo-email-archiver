@@ -78,6 +78,15 @@ pub struct Prepared {
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct CompactReport {
+    pub moved: u64,
+    pub packs_removed: u64,
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct ImportStats {
     pub added: u64,
     pub new_locations: u64,
@@ -258,9 +267,13 @@ impl Archive {
         self.packs.read(n as u32, off, len)
     }
 
-    /// True when the pack holding `loc` is long enough to contain it.
-    fn pack_has(&self, loc: [u64; 3]) -> bool {
-        fs::metadata(pack::pack_path(&self.root, loc[0] as u32)).map(|m| m.len() >= loc[1] + loc[2]).unwrap_or(false)
+    /// Pack sizes as seen now (one directory listing, not one stat per message).
+    fn pack_sizes(&self) -> std::collections::HashMap<u32, u64> {
+        pack::list_packs(&self.root)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(n, p)| fs::metadata(p).ok().map(|m| (n, m.len())))
+            .collect()
     }
 
     /// Pack file, offset and length of a message (for tools and tests).
@@ -416,6 +429,32 @@ impl Archive {
         let mut offsets: Vec<(u32, u64)> = Vec::new();
         let mut began = false;
         let mut queued: std::collections::HashMap<String, [u64; 3]> = std::collections::HashMap::new();
+        // Where message bytes are: (sizes, refreshed?). Refreshed once when a
+        // location looks missing, to tell NAS lag from compacted packs.
+        let mut sizes: Option<std::collections::HashMap<u32, u64>> = None;
+        let mut refreshed = false;
+        // Ok(true) = bytes present, Ok(false) = not visible yet (stop and retry
+        // later), Err(()) = pack removed by compaction (later entries fix it).
+        let mut where_is = |this: &Self, loc: [u64; 3]| -> std::result::Result<bool, ()> {
+            let have = |m: &std::collections::HashMap<u32, u64>| m.get(&(loc[0] as u32)).is_some_and(|&l| l >= loc[1] + loc[2]);
+            let m = sizes.get_or_insert_with(|| this.pack_sizes());
+            if have(m) {
+                return Ok(true);
+            }
+            if !refreshed {
+                refreshed = true;
+                *m = this.pack_sizes();
+                if have(m) {
+                    return Ok(true);
+                }
+            }
+            let n = loc[0] as u32;
+            if !m.contains_key(&n) && m.keys().any(|&k| k > n) {
+                Err(())
+            } else {
+                Ok(false)
+            }
+        };
         'segs: for (seg, path) in journal::segments(&self.root)? {
             let off = self.catalog.applied_offset(seg)?;
             let len = fs::metadata(&path)?.len();
@@ -440,7 +479,7 @@ impl Archive {
                             self.catalog.add_location(&id, &src, &folder, at)?;
                         } else if !self.catalog.has_message(&id)? {
                             if let Some(loc) = p {
-                                if !self.pack_has(loc) {
+                                if where_is(self, loc) == Ok(false) {
                                     // Bytes not visible yet (NAS caching lag):
                                     // stop here and retry from this entry later.
                                     offsets.push((seg, done_to));
@@ -458,6 +497,24 @@ impl Archive {
                     }
                     Entry::Import { kind, path, at, added, dupes, failed } => {
                         self.catalog.record_import(&kind, &path, at, added, dupes, failed)?;
+                    }
+                    Entry::Delete { id, .. } => {
+                        queued.remove(&id);
+                        self.dirty.remove(&id);
+                        if self.catalog.delete_message(&id)? {
+                            self.index.delete(&id)?;
+                        }
+                    }
+                    Entry::Moved { id, p } => {
+                        if where_is(self, p) != Ok(true) {
+                            offsets.push((seg, done_to));
+                            break 'segs;
+                        }
+                        if let Some(q) = queued.get_mut(&id) {
+                            *q = p;
+                        } else {
+                            self.catalog.set_location(&id, p)?;
+                        }
                     }
                 }
                 done_to = end;
@@ -484,6 +541,107 @@ impl Archive {
         }
         self.catalog.commit()?;
         Ok(applied)
+    }
+
+    /// Remove messages from the archive. They disappear from search at once
+    /// (on every computer, after it syncs); their bytes stay in the message
+    /// packs until `compact` rewrites them.
+    pub fn delete_messages(&mut self, ids: &[String]) -> Result<u64> {
+        if self.journal.is_none() {
+            bail!("archive is open read-only");
+        }
+        if self.catalog.conn.is_autocommit() {
+            self.catalog.begin()?;
+        }
+        let at = chrono::Utc::now().timestamp();
+        let mut n = 0;
+        for id in ids {
+            pack::check_id(id)?;
+            if self.catalog.delete_message(id)? {
+                self.journal.as_mut().unwrap().append(&Entry::Delete { id: id.clone(), at })?;
+                self.index.delete(id)?;
+                self.dirty.remove(id);
+                n += 1;
+            }
+        }
+        self.commit()?;
+        Ok(n)
+    }
+
+    /// Rewrite message packs that hold deleted messages, then remove the old
+    /// packs, so deleted mail is really gone from the archive folder.
+    pub fn compact(&mut self, mut progress: impl FnMut(u64, u64)) -> Result<CompactReport> {
+        if self.journal.is_none() {
+            bail!("archive is open read-only");
+        }
+        self.commit()?;
+        let mut live: std::collections::HashMap<u32, Vec<(u64, u64, String)>> = std::collections::HashMap::new();
+        for (id, [n, off, len]) in self.catalog.all_locations()? {
+            live.entry(n as u32).or_default().push((off, len, id));
+        }
+        let mut r = CompactReport::default();
+        let mut victims = Vec::new();
+        for (n, path) in pack::list_packs(&self.root)? {
+            let size = fs::metadata(&path)?.len();
+            r.bytes_before += size;
+            let recs = live.get(&n).map(|v| v.as_slice()).unwrap_or(&[]);
+            // Live bytes incl. record framing: header line, bytes, newline.
+            let used: u64 = recs.iter().map(|(_, len, id)| (pack::MAGIC.len() + id.len() + len.to_string().len() + 4) as u64 + len).sum();
+            // Any deleted message makes the pack a candidate: deleted mail
+            // should really be gone.
+            if used < size {
+                victims.push((n, path, size));
+            } else {
+                r.bytes_after += size;
+            }
+        }
+        if victims.is_empty() {
+            return Ok(r);
+        }
+        let total: u64 = victims.iter().map(|v| live.get(&v.0).map(|x| x.len() as u64).unwrap_or(0)).sum();
+        let first_new = self.packw.as_mut().unwrap().rotate()?;
+        if self.catalog.conn.is_autocommit() {
+            self.catalog.begin()?;
+        }
+        let mut done = 0u64;
+        for (n, _, _) in &victims {
+            let mut recs = live.remove(n).unwrap_or_default();
+            recs.sort_unstable();
+            for (off, len, id) in recs {
+                let raw = self.packs.read(*n, off, len)?;
+                if sha256_hex(&raw) != id {
+                    bail!("message {id} in pack {n} does not match its checksum; run verify before compacting");
+                }
+                let (nn, noff) = self.packw.as_mut().unwrap().append(&id, &raw)?;
+                let p = [nn as u64, noff, len];
+                self.journal.as_mut().unwrap().append(&Entry::Moved { id: id.clone(), p })?;
+                self.catalog.set_location(&id, p)?;
+                r.moved += 1;
+                done += 1;
+                if done % 1000 == 0 {
+                    progress(done, total);
+                }
+            }
+        }
+        // New packs and journal durable before the old packs go.
+        self.commit()?;
+        self.packs = PackReader::new(&self.root);
+        for (n, path, _) in &victims {
+            if *n >= first_new {
+                continue;
+            }
+            match fs::remove_file(path) {
+                Ok(()) => r.packs_removed += 1,
+                Err(e) => r.warnings.push(format!("could not remove {}: {e}", path.display())),
+            }
+        }
+        for (n, path) in pack::list_packs(&self.root)? {
+            if n >= first_new {
+                r.bytes_after += fs::metadata(&path)?.len();
+            }
+        }
+        progress(done, total);
+        Ok(r)
     }
 
     /// Re-index messages, parsing in parallel when there are many.

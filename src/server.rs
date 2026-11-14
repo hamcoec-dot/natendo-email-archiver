@@ -127,6 +127,9 @@ pub fn router(st: S) -> Router {
         .route("/api/run", post(run_adhoc))
         .route("/api/jobs", get(jobs))
         .route("/api/export", post(export))
+        .route("/api/delete", post(delete_msgs))
+        .route("/api/compact", post(compact))
+        .route("/api/backup", post(backup))
         .route("/api/export/imap", post(export_imap))
         .route("/api/export/smtp", post(export_smtp))
         .layer(middleware::from_fn_with_state(st.clone(), host_guard))
@@ -501,6 +504,71 @@ async fn export_smtp(State(st): State<S>, Json(r): Json<DeliverReq>) -> ApiResul
     })
     .await??;
     Ok((StatusCode::OK, Json(json!(v))))
+}
+
+#[derive(Deserialize)]
+struct DeleteReq {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    ids: Vec<String>,
+}
+
+/// Run a writer task while no import is running.
+async fn with_writer<T: Send + 'static>(st: &S, f: impl FnOnce(&mut Archive) -> Result<T> + Send + 'static) -> ApiResult<std::result::Result<T, (StatusCode, String)>> {
+    if st.importing.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(Err((StatusCode::CONFLICT, "wait for the running import to finish".into())));
+    }
+    let st2 = st.clone();
+    let r = tokio::task::spawn_blocking(move || -> Result<T> {
+        let mut w = writer(&st2)?;
+        let out = f(&mut w)?;
+        drop(w);
+        st2.archive.lock().unwrap().try_sync();
+        Ok(out)
+    })
+    .await;
+    st.importing.store(false, std::sync::atomic::Ordering::SeqCst);
+    Ok(Ok(r??))
+}
+
+async fn delete_msgs(State(st): State<S>, Json(r): Json<DeleteReq>) -> ApiResult<impl IntoResponse> {
+    let ids = match r.q.filter(|q| !q.trim().is_empty()) {
+        Some(q) => {
+            let st2 = st.clone();
+            tokio::task::spawn_blocking(move || st2.archive.lock().unwrap().index.all_ids(&q)).await??
+        }
+        None => r.ids,
+    };
+    if ids.is_empty() {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "nothing selected"}))));
+    }
+    Ok(match with_writer(&st, move |w| w.delete_messages(&ids)).await? {
+        Ok(n) => (StatusCode::OK, Json(json!({"deleted": n}))),
+        Err((c, e)) => (c, Json(json!({"error": e}))),
+    })
+}
+
+async fn compact(State(st): State<S>) -> ApiResult<impl IntoResponse> {
+    Ok(match with_writer(&st, |w| w.compact(|_, _| {})).await? {
+        Ok(r) => (StatusCode::OK, Json(json!(r))),
+        Err((c, e)) => (c, Json(json!({"error": e}))),
+    })
+}
+
+#[derive(Deserialize)]
+struct BackupReq {
+    path: String,
+}
+
+async fn backup(State(st): State<S>, Json(r): Json<BackupReq>) -> ApiResult<impl IntoResponse> {
+    let dest = PathBuf::from(r.path.trim());
+    if !dest.is_absolute() {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "Enter a full path, for example E:\\Mail backup"}))));
+    }
+    let root = st.root.clone();
+    let rep = tokio::task::spawn_blocking(move || crate::backup::backup(&root, &dest, |_| {})).await??;
+    Ok((StatusCode::OK, Json(json!(rep))))
 }
 
 async fn export(State(st): State<S>, Json(r): Json<ExportReq>) -> ApiResult<impl IntoResponse> {

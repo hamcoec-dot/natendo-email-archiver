@@ -348,3 +348,72 @@ fn priority_archive_date_and_mailstore_aliases() {
     assert_eq!(ids(&a, "archivedbefore:2020"), 0);
     assert_eq!(ids(&a, "bcontent:digest"), 1);
 }
+
+#[test]
+fn delete_compact_backup_and_second_machine() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("a");
+    let bak = d.path().join("bak");
+    let mut a = writer(&root, &d.path().join("c1"));
+    let f = |s: &str| vec![s.to_string()];
+    for i in 0..40 {
+        let body = format!("Message number {i} about {}. {}", if i % 2 == 0 { "budget" } else { "garden" }, "padding ".repeat(200));
+        a.add(&msg("a@b.com", "c@d.com", &format!("Note {i}"), "Tue, 05 Mar 2019 10:00:00 +0000", &body), "t", &f("INBOX")).unwrap();
+    }
+    a.commit().unwrap();
+    // Second computer with its own cache, up to date.
+    let mut b = reader(&root, &d.path().join("c2"));
+    assert_eq!(ids(&b, "garden"), 20);
+
+    // First backup copies everything; the backup opens as an archive.
+    let r1 = nea::backup::backup(&root, &bak, |_| {}).unwrap();
+    assert!(r1.copied >= 3 && r1.bytes > 0, "{r1:?}");
+    assert_eq!(ids(&reader(&bak, &d.path().join("cb")), "garden"), 20);
+
+    // Delete: gone from search here and, after syncing, on the other computer.
+    let garden = a.index.all_ids("garden").unwrap();
+    assert_eq!(a.delete_messages(&garden).unwrap(), 20);
+    assert_eq!(ids(&a, "garden"), 0);
+    assert_eq!(ids(&a, "budget"), 20);
+    b.try_sync();
+    assert_eq!(ids(&b, "garden"), 0);
+
+    // Compaction rewrites the pack without the deleted mail.
+    let before = std::fs::read_dir(root.join("messages")).unwrap().count();
+    let r = a.compact(|_, _| {}).unwrap();
+    assert_eq!(r.moved, 20, "{r:?}");
+    assert!(r.bytes_after < r.bytes_before, "{r:?}");
+    assert!(r.warnings.is_empty(), "{r:?}");
+    assert_eq!(a.compact(|_, _| {}).unwrap().moved, 0, "nothing left to reclaim");
+    assert!(std::fs::read_dir(root.join("messages")).unwrap().count() <= before);
+    let v = a.verify(|_| {}).unwrap();
+    assert_eq!((v.ok, v.corrupt.len(), v.missing.len(), v.unknown_files), (20, 0, 0, 0), "{v:?}");
+    let any = a.index.all_ids("budget").unwrap();
+    assert!(a.read_raw(&any[0]).unwrap().starts_with(b"From: a@b.com"));
+
+    // The other computer follows the moved messages.
+    b.try_sync();
+    let bid = b.index.all_ids("budget").unwrap();
+    assert_eq!(bid.len(), 20);
+    for id in &bid {
+        assert_eq!(nea::archive::sha256_hex(&b.read_raw(id).unwrap()), *id);
+    }
+
+    // Add more, back up again: incremental, and the removed pack goes too.
+    a.add(&msg("a@b.com", "c@d.com", "Late", "Tue, 05 Mar 2019 10:00:00 +0000", "late arrival"), "t", &f("INBOX")).unwrap();
+    a.commit().unwrap();
+    let r2 = nea::backup::backup(&root, &bak, |_| {}).unwrap();
+    assert!(r2.removed >= 1, "{r2:?}");
+    let r3 = nea::backup::backup(&root, &bak, |_| {}).unwrap();
+    assert_eq!((r3.copied, r3.appended, r3.bytes), (0, 0, 0), "nothing new: {r3:?}");
+    let bk = reader(&bak, &d.path().join("cb2"));
+    assert_eq!(ids(&bk, "budget"), 20);
+    assert_eq!(ids(&bk, "garden"), 0);
+    assert_eq!(ids(&bk, "late"), 1);
+    let v = bk.verify(|_| {}).unwrap();
+    assert_eq!((v.ok, v.corrupt.len(), v.missing.len()), (21, 0, 0), "{v:?}");
+    // A different archive can't be backed up over this one.
+    let other = d.path().join("other");
+    drop(writer(&other, &d.path().join("c3")));
+    assert!(nea::backup::backup(&other, &bak, |_| {}).is_err());
+}

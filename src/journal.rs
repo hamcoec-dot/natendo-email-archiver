@@ -33,6 +33,10 @@ pub enum Entry {
     Sync { src: String, folder: String, uidvalidity: u32, last_uid: u32 },
     /// Record of an import run, for the history panel.
     Import { kind: String, path: String, at: i64, added: u64, dupes: u64, failed: u64 },
+    /// Message removed from the archive (its bytes go at the next compaction).
+    Delete { id: String, at: i64 },
+    /// Message bytes relocated by compaction.
+    Moved { id: String, p: [u64; 3] },
 }
 
 pub fn journal_dir(root: &Path) -> PathBuf {
