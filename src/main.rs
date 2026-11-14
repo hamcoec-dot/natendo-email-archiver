@@ -394,7 +394,7 @@ fn main() -> Result<()> {
             let mut o = opts(&cli, true);
             o.create = true;
             let mut a = Archive::open(&cli.archive, &o)?;
-            let p = ic.to_profile("import");
+            let p = ic.to_profile("import:cli");
             run_profile(&mut a, &p)?;
         }
         Cmd::Profile(pc) => {

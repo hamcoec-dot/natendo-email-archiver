@@ -36,7 +36,7 @@ pub struct ImapConfig {
     #[serde(default)]
     pub folders: Vec<String>,
     /// Case-insensitive substrings of folder names to skip.
-    #[serde(default)]
+    #[serde(default = "default_exclude")]
     pub exclude: Vec<String>,
     /// Allow an unencrypted connection (local testing only).
     #[serde(default)]
@@ -47,6 +47,10 @@ pub struct ImapConfig {
     /// Delete archived messages from the server afterwards.
     #[serde(default)]
     pub delete: Option<DeleteRule>,
+}
+
+pub fn default_exclude() -> Vec<String> {
+    DEFAULT_EXCLUDE.iter().map(|s| s.to_string()).collect()
 }
 
 pub const DEFAULT_EXCLUDE: &[&str] = &["spam", "junk", "trash", "deleted items", "deleted messages", "bulk mail"];

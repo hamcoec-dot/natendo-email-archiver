@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::archive::{Archive, ImportStats, OpenOptions};
+use crate::profile::{self, Profile, Source};
 use crate::parse;
 use crate::query::Sort;
 
@@ -118,6 +119,11 @@ pub fn router(st: S) -> Router {
         .route("/api/stats", get(stats))
         .route("/api/contacts", get(contacts))
         .route("/api/import", post(start_import))
+        .route("/api/profiles", get(list_profiles).post(save_profile))
+        .route("/api/profiles/:name", axum::routing::delete(delete_profile))
+        .route("/api/profiles/:name/run", post(run_profile))
+        .route("/api/outlook/folders", get(outlook_folders))
+        .route("/api/run", post(run_adhoc))
         .route("/api/jobs", get(jobs))
         .route("/api/export", post(export))
         .layer(middleware::from_fn_with_state(st.clone(), host_guard))
@@ -304,16 +310,26 @@ async fn start_import(State(st): State<S>, Json(r): Json<ImportReq>) -> ApiResul
     if !path.exists() {
         return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "path does not exist"}))));
     }
-    if !matches!(r.kind.as_str(), "eml" | "mailstore" | "mbox" | "pst") {
-        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "kind must be eml, mailstore, mbox or pst"}))));
-    }
+    let source = match r.kind.as_str() {
+        "eml" => Source::Eml { path, src: r.src.clone() },
+        "mailstore" => Source::Mailstore { path, src: r.src.clone() },
+        "mbox" => Source::Mbox { path, src: r.src.clone() },
+        "pst" => Source::Pst { path, src: r.src.clone() },
+        _ => return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "kind must be eml, mailstore, mbox or pst"})))),
+    };
+    let p = Profile { name: format!("import:{}", r.kind), source, window: Default::default(), password_env: None, last_run: None };
+    spawn_job(&st, &r.kind, &r.path, p, None)
+}
+
+/// Run a profile as a background job holding the writer lock.
+fn spawn_job(st: &S, kind: &str, label: &str, profile: Profile, password: Option<String>) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     if st.importing.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return Ok((StatusCode::CONFLICT, Json(json!({"error": "an import is already running"}))));
     }
     let id = {
         let mut jobs = st.jobs.lock().unwrap();
         let id = jobs.len() as u64 + 1;
-        jobs.push(Job { id, kind: r.kind.clone(), path: r.path.clone(), state: "running".into(), ..Default::default() });
+        jobs.push(Job { id, kind: kind.to_string(), path: label.to_string(), state: "running".into(), ..Default::default() });
         id
     };
     let st2 = st.clone();
@@ -324,18 +340,13 @@ async fn start_import(State(st): State<S>, Json(r): Json<ImportReq>) -> ApiResul
             }
         };
         let res = (|| -> Result<ImportStats> {
-            let mut opts = st2.opts.clone();
-            opts.writer = true;
-            opts.create = false;
-            let mut w = Archive::open(&st2.root, &opts)?;
-            let prog = |s: &ImportStats| update(&|j: &mut Job| j.stats = Some(s.clone()));
-            let src = r.src.clone();
-            let stats = match r.kind.as_str() {
-                "eml" => crate::import::eml::import(&mut w, &path, src.as_deref().unwrap_or("files"), crate::import::eml::Flavor::Files, prog)?,
-                "mailstore" => crate::import::eml::import(&mut w, &path, src.as_deref().unwrap_or("mailstore"), crate::import::eml::Flavor::MailStore, prog)?,
-                "pst" => crate::import::pst::import(&mut w, &path, src.as_deref().unwrap_or("outlook"), prog)?,
-                _ => crate::import::mbox::import(&mut w, &path, src.as_deref().unwrap_or("mbox"), prog)?,
-            };
+            let mut w = writer(&st2)?;
+            let stats = profile::run(
+                &mut w,
+                &profile,
+                || password.clone().filter(|p| !p.is_empty()).ok_or_else(|| anyhow::anyhow!("a password is needed")),
+                |_, s| update(&|j: &mut Job| j.stats = Some(s.clone())),
+            )?;
             w.commit()?;
             drop(w);
             st2.archive.lock().unwrap().try_sync();
@@ -354,6 +365,84 @@ async fn start_import(State(st): State<S>, Json(r): Json<ImportReq>) -> ApiResul
         }
     });
     Ok((StatusCode::OK, Json(json!({"job": id}))))
+}
+
+fn writer(st: &AppState) -> Result<Archive> {
+    let mut opts = st.opts.clone();
+    opts.writer = true;
+    opts.create = false;
+    Archive::open(&st.root, &opts)
+}
+
+async fn list_profiles(State(st): State<S>) -> ApiResult<impl IntoResponse> {
+    let all = profile::load(&st.root)?;
+    Ok(Json(
+        all.into_iter()
+            .map(|p| json!({"name": p.name, "describe": p.describe(), "needs_password": p.needs_password() && p.password_env.as_deref().and_then(|v| std::env::var(v).ok()).is_none(), "last_run": p.last_run, "profile": p}))
+            .collect::<Vec<_>>(),
+    ))
+}
+
+async fn save_profile(State(st): State<S>, Json(p): Json<Profile>) -> ApiResult<impl IntoResponse> {
+    if p.name.trim().is_empty() {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "name is required"}))));
+    }
+    if let Err(e) = p.source_window().validate().and_then(|_| p.window.validate()) {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": format!("{e:#}")}))));
+    }
+    if st.importing.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok((StatusCode::CONFLICT, Json(json!({"error": "wait for the running import to finish"}))));
+    }
+    let st2 = st.clone();
+    let d = p.describe();
+    tokio::task::spawn_blocking(move || profile::upsert(&writer(&st2)?, p)).await??;
+    Ok((StatusCode::OK, Json(json!({"saved": d}))))
+}
+
+async fn delete_profile(State(st): State<S>, UrlPath(name): UrlPath<String>) -> ApiResult<impl IntoResponse> {
+    if st.importing.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok((StatusCode::CONFLICT, Json(json!({"error": "wait for the running import to finish"}))));
+    }
+    let st2 = st.clone();
+    let removed = tokio::task::spawn_blocking(move || profile::remove(&writer(&st2)?, &name)).await??;
+    Ok((StatusCode::OK, Json(json!({"removed": removed}))))
+}
+
+#[derive(Deserialize, Default)]
+struct RunReq {
+    #[serde(default)]
+    password: Option<String>,
+}
+
+async fn run_profile(State(st): State<S>, UrlPath(name): UrlPath<String>, body: Option<Json<RunReq>>) -> ApiResult<impl IntoResponse> {
+    let p = match profile::find(&st.root, &name) {
+        Ok(p) => p,
+        Err(e) => return Ok((StatusCode::NOT_FOUND, Json(json!({"error": format!("{e:#}")})))),
+    };
+    let pw = body.and_then(|b| b.0.password);
+    let label = p.describe();
+    spawn_job(&st, "profile", &label, p, pw)
+}
+
+#[derive(Deserialize)]
+struct AdhocReq {
+    profile: Profile,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// Run an unsaved profile once (the "Archive now" button).
+async fn run_adhoc(State(st): State<S>, Json(r): Json<AdhocReq>) -> ApiResult<impl IntoResponse> {
+    if let Err(e) = r.profile.source_window().validate().and_then(|_| r.profile.window.validate()) {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": format!("{e:#}")}))));
+    }
+    let label = r.profile.describe();
+    spawn_job(&st, "archive", &label, r.profile, r.password)
+}
+
+async fn outlook_folders() -> ApiResult<impl IntoResponse> {
+    let v = tokio::task::spawn_blocking(crate::import::outlook::list_folders).await??;
+    Ok(Json(v.into_iter().map(|(store, path, count)| json!({"store": store, "path": path, "count": count})).collect::<Vec<_>>()))
 }
 
 async fn jobs(State(st): State<S>) -> impl IntoResponse {

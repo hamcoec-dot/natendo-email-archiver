@@ -94,7 +94,21 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
 .modal h2 { margin: 0 0 12px; font-size: 18px; }
 .modal label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
 .modal input[type=text], .modal select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
-.modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+.modal input[type=password], .modal input[type=date] { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); color: inherit; }
+.modal .grid2, .modal .grid3 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.modal .grid3 { grid-template-columns: 1fr 1fr 1fr; }
+@media (max-width: 560px) { .modal .grid2, .modal .grid3 { grid-template-columns: 1fr; } }
+.modal label.check { display: flex; gap: 8px; align-items: center; color: inherit; }
+.modal details { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.modal summary { cursor: pointer; font-size: 13.5px; }
+.modal .delbox { margin-top: 10px; }
+.modal .delbox small, .modal .picker small { color: var(--muted); }
+.modal .picker { max-height: 180px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.modal .picker label { margin: 2px 0; }
+.prof { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.prof .d { flex: 1; min-width: 0; }
+.prof .d small { color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; }
 .help table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .help td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .help td:first-child { font-family: ui-monospace, Consolas, monospace; white-space: nowrap; color: var(--accent); cursor: pointer; }
@@ -129,7 +143,7 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
   </select>
   <button class="btn" id="helpBtn" title="Search syntax">?</button>
   <button class="btn" id="saveBtn" title="Save this search">☆</button>
-  <button class="btn" id="importBtn">Import</button>
+  <button class="btn" id="importBtn">Archive mail</button>
   <button class="btn" id="exportBtn" title="Export the current results">Export</button>
   <button class="btn" id="infoBtn" title="Archive info">Archive</button>
 </header>
@@ -141,20 +155,54 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
 
 <div class="modal-bg" id="importModal">
   <div class="modal">
-    <h2>Import mail</h2>
+    <h2>Archive mail</h2>
+    <div id="profiles"></div>
     <label for="impKind">Source</label>
     <select id="impKind">
+      <option value="outlook">Outlook on this PC (classic Outlook, Windows)</option>
+      <option value="imap">Email account over IMAP (Gmail, Outlook.com, any server)</option>
+      <option value="pop3">Email account over POP3</option>
       <option value="mailstore">MailStore Home export (folder of EML files)</option>
-      <option value="eml">Folder of .eml files</option>
+      <option value="eml">Folder of .eml / .msg files</option>
       <option value="mbox">MBOX file, Google Takeout, or Thunderbird profile folder</option>
       <option value="pst">Outlook data file (.pst / .ost), experimental</option>
     </select>
-    <label for="impPath">Path on this computer</label>
-    <input type="text" id="impPath" placeholder="C:\Users\me\Desktop\MailStore Export">
     <p style="font-size:12.5px;color:var(--muted)" id="impHint"></p>
-    <p style="font-size:12.5px;color:var(--muted)">IMAP accounts (Gmail, Outlook.com, any server) are archived from the command line for now: <code>nea import imap --host imap.gmail.com --user you@gmail.com</code></p>
+    <div data-kinds="mailstore eml mbox pst">
+      <label for="impPath">Path on this computer</label>
+      <input type="text" id="impPath" placeholder="C:\Users\me\Desktop\MailStore Export">
+    </div>
+    <div data-kinds="imap pop3">
+      <div class="grid2">
+        <div><label for="impHost">Server</label><input type="text" id="impHost" placeholder="imap.gmail.com"></div>
+        <div><label for="impPort">Port</label><input type="text" id="impPort" placeholder="993"></div>
+      </div>
+      <label for="impUser">User name</label><input type="text" id="impUser" autocomplete="off" placeholder="you@gmail.com">
+      <label for="impPass">Password or app password (never saved)</label><input type="password" id="impPass" autocomplete="off">
+    </div>
+    <div data-kinds="outlook">
+      <label>Folders <button class="btn small" id="olLoad" type="button">Load from Outlook</button></label>
+      <div id="olFolders" class="picker"><small>All mail folders except Deleted Items and Junk. Load the list to pick specific ones.</small></div>
+    </div>
+    <details id="rules"><summary>Date range and deletion rules</summary>
+      <div class="grid3">
+        <div><label for="wAfter">Only mail from</label><input type="date" id="wAfter"></div>
+        <div><label for="wBefore">Only mail before</label><input type="date" id="wBefore"></div>
+        <div><label for="wOlder">Only mail older than (days)</label><input type="text" id="wOlder" inputmode="numeric" placeholder="e.g. 90"></div>
+      </div>
+      <div data-kinds="outlook imap pop3" class="delbox">
+        <label class="check"><input type="checkbox" id="delOn"> After archiving, delete the archived mail from the source</label>
+        <div class="grid2">
+          <div><label for="delDays">Only if older than (days, 0 = any age)</label><input type="text" id="delDays" inputmode="numeric" value="365"></div>
+          <div><label class="check" style="margin-top:28px"><input type="checkbox" id="delUnread"> Also delete unread mail</label></div>
+        </div>
+        <small>Flagged mail is never deleted. Only mail the archive provably holds is deleted. Outlook moves it to Deleted Items.</small>
+      </div>
+    </details>
+    <label for="profName">Save as profile (optional, to run again later)</label>
+    <input type="text" id="profName" placeholder="e.g. Work mailbox, monthly">
     <div class="jobs" id="jobs"></div>
-    <div class="row"><button class="btn" data-close>Close</button><button class="btn primary" id="impStart">Start import</button></div>
+    <div class="row"><button class="btn" data-close>Close</button><button class="btn" id="profSave">Save profile</button><button class="btn primary" id="impStart">Archive now</button></div>
   </div>
 </div>
 
@@ -480,29 +528,110 @@ document.querySelectorAll("#helpTable td[data-q]").forEach((td) => td.onclick = 
 $("#helpBtn").onclick = () => openModal("#helpModal");
 
 const HINTS = {
+  outlook: "Archives straight from the Outlook profile on this PC. Outlook may show a security prompt the first time. Only new mail is read on later runs.",
+  imap: "Gmail and many others need an app password. Gmail is archived once from All Mail, with labels kept as folders.",
+  pop3: "POP3 has no folders; everything goes into Inbox.",
   mailstore: "In MailStore Home: Export Email, then Directory (File System), format EML. Choose that folder here. Accounts and folders are rebuilt from the export's folder tree.",
   eml: "Every .eml and Outlook .msg file under this folder is imported; subfolders become folders.",
   mbox: "A single .mbox file (Google Takeout keeps Gmail labels), or a Thunderbird profile's Mail folder.",
   pst: "An Outlook .pst or .ost file. Close Outlook first. Folders keep their Outlook names.",
 };
-$("#impKind").onchange = () => $("#impHint").textContent = HINTS[$("#impKind").value];
-$("#impKind").onchange();
-$("#importBtn").onclick = () => { openModal("#importModal"); pollJobs(); };
-$("#impStart").onclick = async () => {
-  const path = $("#impPath").value.trim().replace(/^"|"$/g, "");
-  if (!path) return;
-  const r = await fetch("/api/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: $("#impKind").value, path }) });
-  const j = await r.json();
-  if (j.error) { $("#jobs").innerHTML = `<span style="color:var(--danger)">${esc(j.error)}</span>`; return; }
-  pollJobs();
+const PORTS = { imap: 993, pop3: 995 };
+$("#impKind").onchange = () => {
+  const k = $("#impKind").value;
+  $("#impHint").textContent = HINTS[k];
+  document.querySelectorAll("#importModal [data-kinds]").forEach((el) => el.style.display = el.dataset.kinds.split(" ").includes(k) ? "" : "none");
+  $("#impPort").placeholder = PORTS[k] || "";
 };
+$("#impKind").onchange();
+$("#olLoad").onclick = async () => {
+  $("#olFolders").innerHTML = "<small>Asking Outlook…</small>";
+  const r = await fetch("/api/outlook/folders");
+  const j = await r.json();
+  if (j.error) { $("#olFolders").innerHTML = `<small style="color:var(--danger)">${esc(j.error)}</small>`; return; }
+  const skip = /deleted items|junk e-?mail|sync issues|conversation history/i;
+  $("#olFolders").innerHTML = j.map((f) => `<label class="check"><input type="checkbox" data-store="${esc(f.store)}" data-path="${esc(f.path)}" ${skip.test(f.path) ? "" : "checked"}> ${esc(f.store)} / ${esc(f.path)} <small>(${f.count.toLocaleString()})</small></label>`).join("") || "<small>No mail folders found.</small>";
+};
+function num(id) { const v = $(id).value.trim(); return v === "" ? null : Math.max(0, parseInt(v, 10) || 0); }
+function buildProfile(name) {
+  const k = $("#impKind").value;
+  const window = {};
+  if ($("#wAfter").value) window.after = $("#wAfter").value;
+  if ($("#wBefore").value) window.before = $("#wBefore").value;
+  if (num("#wOlder") !== null) window.older_than_days = num("#wOlder");
+  const del = $("#delOn").checked ? { older_than_days: num("#delDays") || 0, include_unread: $("#delUnread").checked } : null;
+  let source;
+  if (k === "outlook") {
+    const boxes = [...document.querySelectorAll("#olFolders input[type=checkbox]")];
+    const picked = boxes.filter((b) => b.checked);
+    const all = boxes.length === 0 || picked.length === boxes.length;
+    source = { kind: "outlook", stores: all ? [] : [...new Set(picked.map((b) => b.dataset.store))], folders: all ? [] : picked.map((b) => b.dataset.path), window, delete: del };
+    if (!all) source.exclude = [];
+    if (!all && picked.length === 0) throw new Error("Pick at least one folder.");
+  } else if (k === "imap" || k === "pop3") {
+    const host = $("#impHost").value.trim(), user = $("#impUser").value.trim();
+    if (!host || !user) throw new Error("Server and user name are needed.");
+    source = { kind: k, host, port: num("#impPort") || PORTS[k], user, window, delete: del };
+  } else {
+    const path = $("#impPath").value.trim().replace(/^"|"$/g, "");
+    if (!path) throw new Error("Enter a path.");
+    source = { kind: k, path };
+  }
+  const isFile = !["outlook", "imap", "pop3"].includes(k);
+  return { name, source, window: isFile ? window : {} };
+}
+function impError(e) { $("#jobs").innerHTML = `<span style="color:var(--danger)">${esc(e.message || e)}</span>`; }
+async function postJson(url, body, method) {
+  const r = await fetch(url, { method: method || "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (j.error) throw new Error(j.error);
+  return j;
+}
+$("#impStart").onclick = async () => {
+  try {
+    const name = $("#profName").value.trim();
+    const p = buildProfile(name || "import:" + $("#impKind").value);
+    if (p.source.delete && !confirm("After archiving, mail will be deleted from the source as set in the rules. Continue?")) return;
+    if (name) { await postJson("/api/profiles", p); loadProfiles(); }
+    await postJson("/api/run", { profile: p, password: $("#impPass").value });
+    pollJobs();
+  } catch (e) { impError(e); }
+};
+$("#profSave").onclick = async () => {
+  try {
+    const name = $("#profName").value.trim();
+    if (!name) throw new Error("Give the profile a name.");
+    const j = await postJson("/api/profiles", buildProfile(name));
+    $("#jobs").innerHTML = `✓ Saved: ${esc(j.saved)}`;
+    loadProfiles();
+  } catch (e) { impError(e); }
+};
+async function loadProfiles() {
+  const list = await (await fetch("/api/profiles")).json();
+  if (!Array.isArray(list) || !list.length) { $("#profiles").innerHTML = ""; return; }
+  $("#profiles").innerHTML = `<h3 style="font-size:14px;margin:0 0 4px">Saved profiles</h3>` + list.map((p, i) => `<div class="prof"><div class="d"><strong>${esc(p.name)}</strong><small title="${esc(p.describe)}">${esc(p.describe)} · last run ${p.last_run ? esc(fmtDate(p.last_run)) : "never"}</small></div>
+    ${p.needs_password ? `<input type="password" placeholder="Password" data-pw="${i}" style="width:110px">` : ""}
+    <button class="btn small" data-run="${i}">Run</button><button class="btn small" data-del="${i}" title="Delete profile (archived mail is kept)">✕</button></div>`).join("");
+  document.querySelectorAll("#profiles [data-run]").forEach((b) => b.onclick = async () => {
+    const i = b.dataset.run, pw = document.querySelector(`#profiles [data-pw="${i}"]`);
+    const p = list[i].profile;
+    if ((p.source.delete) && !confirm(`"${p.name}" deletes archived mail from the source. Run it?`)) return;
+    try { await postJson(`/api/profiles/${encodeURIComponent(p.name)}/run`, { password: pw ? pw.value : null }); pollJobs(); } catch (e) { impError(e); }
+  });
+  document.querySelectorAll("#profiles [data-del]").forEach((b) => b.onclick = async () => {
+    const p = list[b.dataset.del];
+    if (!confirm(`Delete the profile "${p.name}"? Archived mail is kept.`)) return;
+    try { await postJson(`/api/profiles/${encodeURIComponent(p.name)}`, null, "DELETE"); loadProfiles(); } catch (e) { impError(e); }
+  });
+}
+$("#importBtn").onclick = () => { openModal("#importModal"); loadProfiles(); pollJobs(); };
 let pollTimer = null, wasRunning = false;
 async function pollJobs() {
   clearTimeout(pollTimer);
   const jobs = await (await fetch("/api/jobs")).json();
   $("#jobs").innerHTML = jobs.slice().reverse().map((j) => {
     const s = j.stats || {};
-    return `<div>${j.state === "running" ? "⏳" : j.state === "done" ? "✓" : "✗"} ${esc(j.kind)}: ${esc(j.path)}<br><small>${(s.added || 0).toLocaleString()} new, ${(s.duplicates || 0).toLocaleString()} already archived, ${(s.failed || 0)} failed${j.error ? " · " + esc(j.error) : ""}</small></div>`;
+    return `<div>${j.state === "running" ? "⏳" : j.state === "done" ? "✓" : "✗"} ${esc(j.kind)}: ${esc(j.path)}<br><small>${(s.added || 0).toLocaleString()} new, ${(s.duplicates || 0).toLocaleString()} already archived, ${(s.failed || 0)} failed${s.skipped ? `, ${s.skipped.toLocaleString()} outside date range` : ""}${s.deleted ? `, ${s.deleted.toLocaleString()} deleted from source` : ""}${j.error ? " · " + esc(j.error) : ""}</small></div>`;
   }).join("");
   const running = jobs.some((j) => j.state === "running");
   if (running) { wasRunning = true; pollTimer = setTimeout(pollJobs, 1000); }
