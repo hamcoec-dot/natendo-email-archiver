@@ -327,3 +327,24 @@ fn outlook_bridge_script_parses() {
     let out = std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &cmd]).output().unwrap();
     assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
 }
+
+#[test]
+fn priority_archive_date_and_mailstore_aliases() {
+    let d = tempfile::tempdir().unwrap();
+    let mut a = writer(&d.path().join("a"), &d.path().join("c"));
+    let src = "t".to_string();
+    let urgent = b"From: boss@acme.com\r\nSubject: Fix now\r\nX-Priority: 1 (Highest)\r\nDate: Tue, 05 Mar 2019 10:00:00 +0000\r\n\r\nThe server is down.\r\n".to_vec();
+    let low = b"From: news@acme.com\r\nSubject: Digest\r\nImportance: low\r\nDate: Tue, 05 Mar 2019 10:00:00 +0000\r\n\r\nWeekly server digest.\r\n".to_vec();
+    a.add(&urgent, &src, &["INBOX".to_string()]).unwrap();
+    a.add(&low, &src, &["INBOX".to_string()]).unwrap();
+    a.add(&msg("a@b.com", "c@d.com", "Plain", "Tue, 05 Mar 2019 10:00:00 +0000", "server notes"), &src, &["INBOX".to_string()]).unwrap();
+    a.commit().unwrap();
+    assert_eq!(ids(&a, "priority:high"), 1);
+    assert_eq!(ids(&a, "priority:low"), 1);
+    assert_eq!(ids(&a, "priority:normal"), 1);
+    assert_eq!(ids(&a, "server -priority:low"), 2);
+    // Archived today, though the mail is from 2019.
+    assert_eq!(ids(&a, "archived:today"), 3);
+    assert_eq!(ids(&a, "archivedbefore:2020"), 0);
+    assert_eq!(ids(&a, "bcontent:digest"), 1);
+}

@@ -59,6 +59,8 @@ pub struct ParsedMessage {
     pub references: Vec<String>,
     /// Gmail labels (from Google Takeout's X-Gmail-Labels header).
     pub gmail_labels: Vec<String>,
+    /// 1 = high, 3 = normal, 5 = low (X-Priority / Importance / Priority).
+    pub priority: u8,
 }
 
 impl ParsedMessage {
@@ -108,6 +110,31 @@ fn text_list(v: &HeaderValue) -> Vec<String> {
     }
 }
 
+/// Normalize the different priority headers to 1 (high), 3 (normal) or 5 (low).
+pub fn priority(x_priority: Option<&str>, importance: Option<&str>) -> u8 {
+    if let Some(x) = x_priority {
+        let x = x.trim().to_ascii_lowercase();
+        if let Some(d) = x.chars().next().and_then(|c| c.to_digit(10)) {
+            return match d {
+                1 | 2 => 1,
+                4 | 5 => 5,
+                _ => 3,
+            };
+        }
+        if x.starts_with("high") {
+            return 1;
+        }
+        if x.starts_with("low") {
+            return 5;
+        }
+    }
+    match importance.map(|s| s.trim().to_ascii_lowercase()) {
+        Some(s) if s.starts_with("high") || s.starts_with("urgent") => 1,
+        Some(s) if s.starts_with("low") || s.starts_with("non-urgent") => 5,
+        _ => 3,
+    }
+}
+
 /// Parse a raw message. Never fails: unparseable input yields an empty message
 /// whose body is the lossy text of the input, so nothing is ever unsearchable.
 pub fn parse(raw: &[u8]) -> ParsedMessage {
@@ -129,6 +156,10 @@ pub fn parse(raw: &[u8]) -> ParsedMessage {
         references: text_list(msg.references()),
         ..Default::default()
     };
+    p.priority = priority(
+        msg.header_raw("X-Priority").or_else(|| msg.header_raw("X-MSMail-Priority")),
+        msg.header_raw("Importance").or_else(|| msg.header_raw("Priority")),
+    );
     if let Some(labels) = msg.header_raw("X-Gmail-Labels") {
         p.gmail_labels = labels
             .split(',')

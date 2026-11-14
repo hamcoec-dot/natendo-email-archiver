@@ -57,7 +57,8 @@ const FIELDS: &[&str] = &[
     "from", "to", "cc", "bcc", "subject", "body", "att", "attachment", "filename", "has", "type", "ext", "after",
     "before", "date", "on", "year", "month", "newer_than", "older_than", "newer", "older", "larger", "smaller",
     "size", "folder", "in", "label", "infolder", "domain", "sender", "source", "src", "id", "msgid",
-    "rfc822msgid", "thread",
+    "rfc822msgid", "thread", "bcontent", "acontent", "archived", "archivedafter", "archivedbefore", "priority",
+    "importance",
 ];
 
 // ---------------------------------------------------------------- lexing
@@ -290,6 +291,17 @@ impl Parsed {
                         Some((lo, hi)) => format!("{} {}", name, describe_range(lo, hi)),
                         None => format!("{name}:{value} (date not understood)"),
                     },
+                    "archived" | "archivedafter" | "archivedbefore" => {
+                        let kind = match name.as_str() {
+                            "archivedafter" => "after",
+                            "archivedbefore" => "before",
+                            _ => "date",
+                        };
+                        match date_range(kind, value) {
+                            Some((lo, hi)) => format!("archived {}", describe_range(lo, hi)),
+                            None => format!("{name}:{value} (date not understood)"),
+                        }
+                    }
                     _ => format!("{name}:{value}"),
                 },
                 Node::Or(v) => format!("({})", v.iter().map(ex).collect::<Vec<_>>().join(" OR ")),
@@ -688,8 +700,26 @@ impl Ctx<'_> {
             "to" => self.address(&[f.to], v)?,
             "cc" | "bcc" => self.address(&[f.cc], v)?,
             "subject" => self.restricted(f.subject, v)?,
-            "body" => self.restricted(f.body, v)?,
-            "att" | "attachment" => self.restricted(f.att_text, v)?,
+            "body" | "bcontent" => self.restricted(f.body, v)?,
+            "att" | "attachment" | "acontent" => self.restricted(f.att_text, v)?,
+            "archived" | "archivedafter" | "archivedbefore" => {
+                let kind = match name {
+                    "archivedafter" => "after",
+                    "archivedbefore" => "before",
+                    _ => "date",
+                };
+                let (lo, hi) = date_range(kind, v)?;
+                Box::new(RangeQuery::new_i64_bounds("archived".into(), lo, hi))
+            }
+            "priority" | "importance" => {
+                let n = match v.to_lowercase().as_str() {
+                    "high" | "urgent" | "1" | "2" => 1,
+                    "low" | "5" | "4" => 5,
+                    "normal" | "3" => 3,
+                    _ => return None,
+                };
+                Box::new(TermQuery::new(Term::from_field_u64(f.priority, n), IndexRecordOption::Basic))
+            }
             "filename" => {
                 let lv = v.to_lowercase();
                 if let Some(ext) = lv.strip_prefix("*.") {
@@ -821,6 +851,7 @@ fn is_range_field(name: &str) -> bool {
     matches!(
         name,
         "after" | "before" | "date" | "on" | "year" | "month" | "newer_than" | "older_than" | "newer" | "older" | "larger" | "smaller" | "size"
+            | "archived" | "archivedafter" | "archivedbefore" | "priority" | "importance"
     )
 }
 

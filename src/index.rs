@@ -17,7 +17,7 @@ use crate::parse::ParsedMessage;
 use crate::query::{self, Sort};
 
 /// Bump when the schema or analysis changes; a mismatch triggers a rebuild.
-pub const INDEX_VERSION: &str = "1";
+pub const INDEX_VERSION: &str = "2";
 
 /// Body text indexed per message (attachments have their own field).
 const MAX_BODY: usize = 512 * 1024;
@@ -37,6 +37,8 @@ pub struct Fields {
     pub date: Field,
     pub size: Field,
     pub has_att: Field,
+    pub archived: Field,
+    pub priority: Field,
     pub att_ext: Field,
     pub thread: Field,
     pub msgid: Field,
@@ -75,7 +77,9 @@ pub fn build_schema() -> (Schema, Fields) {
         raw: b.add_text_field("raw", text("raw", false)),
         date: b.add_i64_field("date", num.clone()),
         size: b.add_u64_field("size", num.clone()),
-        has_att: b.add_u64_field("has_att", num),
+        has_att: b.add_u64_field("has_att", num.clone()),
+        archived: b.add_i64_field("archived", num.clone()),
+        priority: b.add_u64_field("priority", num),
         att_ext: b.add_text_field("att_ext", STRING),
         thread: b.add_text_field("thread", STRING | STORED),
         msgid: b.add_text_field("msgid", STRING),
@@ -200,10 +204,23 @@ impl SearchIndex {
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let (schema, f) = build_schema();
-        let index = if dir.join("meta.json").exists() {
-            Index::open_in_dir(dir)?
-        } else {
-            Index::create_in_dir(dir, schema)?
+        let mut existing = None;
+        if dir.join("meta.json").exists() {
+            let old = Index::open_in_dir(dir)?;
+            // An older index format lacks newer fields: start a fresh index
+            // (the archive notices the version change and rebuilds it).
+            let same = schema.fields().all(|(_, e)| old.schema().get_field(e.name()).is_ok());
+            if same {
+                existing = Some(old);
+            } else {
+                drop(old);
+                std::fs::remove_dir_all(dir)?;
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+        let index = match existing {
+            Some(i) => i,
+            None => Index::create_in_dir(dir, schema)?,
         };
         register_tokenizers(&index);
         let reader = index.reader_builder().reload_policy(ReloadPolicy::OnCommitWithDelay).try_into()?;
@@ -217,7 +234,8 @@ impl SearchIndex {
         Ok(self.writer.as_mut().unwrap())
     }
 
-    pub fn build_doc(&self, id: &str, size: usize, p: &ParsedMessage, locations: &[(String, String)]) -> TantivyDocument {
+    /// `archived`: when the message first entered the archive (Unix seconds).
+    pub fn build_doc(&self, id: &str, size: usize, p: &ParsedMessage, locations: &[(String, String)], archived: i64) -> TantivyDocument {
         let f = &self.f;
         let mut d = TantivyDocument::new();
         d.add_text(f.id, id);
@@ -262,6 +280,8 @@ impl SearchIndex {
         d.add_i64(f.date, p.date);
         d.add_u64(f.size, size as u64);
         d.add_u64(f.has_att, (real_atts > 0) as u64);
+        d.add_i64(f.archived, archived);
+        d.add_u64(f.priority, if p.priority == 0 { 3 } else { p.priority as u64 });
         d.add_facet(f.f_date, date_facet(p.date));
         let tk = p.thread_key();
         d.add_text(f.thread, if tk.is_empty() { id } else { tk.as_str() });

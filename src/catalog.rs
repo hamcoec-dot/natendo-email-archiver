@@ -143,6 +143,12 @@ impl Catalog {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// When a message first entered the archive (earliest location).
+    pub fn archived_at(&self, id: &str) -> Result<i64> {
+        let mut stmt = self.conn.prepare_cached("SELECT COALESCE(MIN(at), 0) FROM locations WHERE id=?1")?;
+        Ok(stmt.query_row([id], |r| r.get(0))?)
+    }
+
     /// [pack, offset, length] of a message.
     pub fn locate(&self, id: &str) -> Result<Option<[u64; 3]>> {
         Ok(self

@@ -96,6 +96,8 @@ Account and folder structure is rebuilt from the export's folder tree (a top-lev
 | `date:"last month"` `year:2021` `month:2021-07` | Calendar periods: today, yesterday, this/last week/month/year, last summer, march 2021, last 3 months |
 | `newer_than:30d` `older_than:2y` | Relative age |
 | `larger:5M` `smaller:100k` | Size |
+| `priority:high` / `low` / `normal` | Priority or importance set by the sender |
+| `archived:2024` `archivedafter:2024-06` `archivedbefore:2025` | When the mail entered the archive |
 | `folder:receipts` `in:inbox` `label:travel` | Folders and Gmail labels |
 | `infolder:"you@gmail.com/INBOX"` `source:mailstore` | Exact folder path or source |
 | `#4471` `C++` `user_id=99` | Symbols kept intact |

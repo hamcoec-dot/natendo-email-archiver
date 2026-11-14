@@ -306,7 +306,7 @@ impl Archive {
                 self.catalog.add_location(&p.id, &p.src, f, now)?;
                 locs.push((p.src.clone(), f.clone()));
             }
-            let doc = self.index.build_doc(&p.id, p.raw.len(), &parsed, &locs);
+            let doc = self.index.build_doc(&p.id, p.raw.len(), &parsed, &locs, now);
             self.index.upsert(doc, &p.id, false)?;
             self.pending += 1;
         }
@@ -403,7 +403,7 @@ impl Archive {
         let raw = self.read_raw(id)?;
         let parsed = parse::parse(&raw);
         let locs = self.catalog.locations(id)?;
-        let doc = self.index.build_doc(id, raw.len(), &parsed, &locs);
+        let doc = self.index.build_doc(id, raw.len(), &parsed, &locs, self.catalog.archived_at(id)?);
         self.index.upsert(doc, id, true)
     }
 
@@ -543,7 +543,7 @@ impl Archive {
                     self.catalog.insert_message(&id, loc, &p)?;
                 }
                 let locs = self.catalog.locations(&id)?;
-                let doc = self.index.build_doc(&id, loc[2] as usize, &p, &locs);
+                let doc = self.index.build_doc(&id, loc[2] as usize, &p, &locs, self.catalog.archived_at(&id)?);
                 self.index.upsert(doc, &id, replace)?;
                 n += 1;
                 if n % 1000 == 0 {
