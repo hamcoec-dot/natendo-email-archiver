@@ -18,13 +18,13 @@
 | Export EML/MBOX (CLI + UI), verify, rebuild | Done | round-trip test is byte-for-byte |
 | Web UI | Done | driven in a browser: search, typos, HTML sandbox, tracker blocked, import, export, saved searches |
 | Desktop window (`nea-desktop`) | Done (Windows checked) | launched; window + WebView2 up; API answered |
-| CI for Windows/macOS/Linux | Written, not yet run (repo not published) | |
+| CI for Windows/macOS/Linux | Runs on every push | GitHub Actions |
 
 Benchmarks (Windows 11 desktop, synthetic mail): 250,000 messages import at 7,783 msg/s; search median 8.2 ms, p95 49 ms including facets and snippets.
 
 ## Open decisions
 
-1. **Publish the repo.** Creating public `hamcoec-dot/natendo-email-archiver` was blocked by auto mode overnight. Approve it in the thread and I will create it, push, and let CI run on all three OSes.
+1. **Publish the repo.** Done: public at https://github.com/hamcoec-dot/natendo-email-archiver.
 2. **Storage format.** Messages live in append-only pack files (`messages/pack-NNNNNN.nmp`, documented in the README) instead of one `.eml` per message. This made imports 13x faster and is much kinder to USB drives and NAS shares. Raw messages are still byte-for-byte originals and `nea export` writes plain `.eml`/`.mbox` at any time. Keep packs (recommended) or switch to loose files?
 3. **Gmail/Microsoft sign-in.** Today Gmail and Outlook.com work over IMAP with an app password. OAuth needs registering the app with Google (verification for restricted Gmail scopes) and Microsoft. Worth starting that process?
 4. **OCR and semantic search.** Both need extra components: OCR via Windows' built-in engine (Windows only) or bundled Tesseract (~30 MB); semantic search via a local embedding model (~100 MB download). Which first, and is a model download acceptable?
