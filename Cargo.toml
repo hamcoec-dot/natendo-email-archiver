@@ -35,6 +35,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 rpassword = "7"
 regex = "1"
 base64 = "0.22"
+cfb = "0.10"
+outlook-pst = "1.2"
 html-escape = "0.2"
 
 [dev-dependencies]

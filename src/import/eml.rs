@@ -1,4 +1,4 @@
-//! Folder-of-.eml import. Also the MailStore Home migration path: MailStore's
+//! Folder-of-.eml (and Outlook .msg) import. Also the MailStore Home migration path: MailStore's
 //! "Export Email to a Directory (File System)" writes one .eml per message in
 //! a tree that mirrors the archive's folders (often starting with the account
 //! address), which this importer turns back into sources and folders.
@@ -39,12 +39,9 @@ pub fn import(
     progress: impl FnMut(&ImportStats),
 ) -> Result<ImportStats> {
     let mut stats = ImportStats::default();
-    let mut skipped_msg = 0u64;
     let root = dir.to_path_buf();
     let src = src.to_string();
     let walker = walkdir::WalkDir::new(dir).sort_by_file_name().into_iter();
-    let msg_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let mc = msg_count.clone();
     let items = walker.filter_map(move |e| {
         let e = match e {
             Ok(e) => e,
@@ -55,29 +52,22 @@ pub fn import(
         }
         let p = e.path();
         let ext = p.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
-        if ext == "msg" {
-            mc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return None;
-        }
-        if ext != "eml" {
+        if ext != "eml" && ext != "msg" {
             return None;
         }
         let rel = p.parent().and_then(|d| d.strip_prefix(&root).ok()).map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
         let (s, folder) = source_and_folder(&rel, &src, flavor);
         Some(match std::fs::read(p) {
             Ok(raw) if raw.is_empty() => Err(format!("{}: empty file", p.display())),
+            Ok(raw) if ext == "msg" => match crate::import::msg::msg_to_eml_bytes(&raw) {
+                Ok(eml) => Ok((eml, s, vec![folder])),
+                Err(err) => Err(format!("{}: {err:#}", p.display())),
+            },
             Ok(raw) => Ok((raw, s, vec![folder])),
             Err(err) => Err(format!("{}: {err}", p.display())),
         })
     });
     ingest(archive, items, &mut stats, progress)?;
-    skipped_msg += msg_count.load(std::sync::atomic::Ordering::Relaxed);
-    if skipped_msg > 0 {
-        stats.fail(format!(
-            "{skipped_msg} Outlook .msg files were skipped: .msg import is not built yet. Re-export from MailStore as EML."
-        ));
-        stats.failed += skipped_msg - 1;
-    }
     let kind = if flavor == Flavor::MailStore { "mailstore" } else { "eml" };
     archive.record_import(kind, &dir.display().to_string(), &stats)?;
     Ok(stats)

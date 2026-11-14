@@ -48,7 +48,7 @@ NEA_IMAP_PASSWORD=... nea --archive MyArchive import imap --host imap.fastmail.c
 # Files
 nea --archive MyArchive import mbox "Takeout/Mail/All mail Including Spam and Trash.mbox"
 nea --archive MyArchive import mbox "C:/Users/me/AppData/Roaming/Thunderbird/Profiles/xyz/Mail"
-nea --archive MyArchive import eml "D:/Old mail"
+nea --archive MyArchive import eml "D:/Old mail"          # .eml and Outlook .msg files
 ```
 
 Running an IMAP import again only fetches new mail (per-folder UIDVALIDITY and last UID are tracked). On Gmail it archives `All Mail` once and records each message's labels as folders, so labelled mail downloads once.
@@ -69,7 +69,7 @@ MailStore Home keeps mail in an undocumented private store, so Natendo imports M
 1. In MailStore Home choose **Export Email**, then **Directory (File System)**, format **EML**, and export your archive folders.
 2. Run `nea --archive MyArchive import mailstore "D:/MailStore Export"` (or use **Import** in the web UI).
 
-Account and folder structure is rebuilt from the export's folder tree (a top-level folder that looks like an email address becomes the source account). Messages already archived from another source are deduplicated by content hash. `.msg` exports are reported and skipped for now; choose EML.
+Account and folder structure is rebuilt from the export's folder tree (a top-level folder that looks like an email address becomes the source account). Messages already archived from another source are deduplicated by content hash. MSG exports work too (they are converted to standard MIME, keeping the original Internet headers when Outlook stored them), but EML is preferred because it is byte-for-byte the original.
 
 ## Search syntax
 
@@ -155,7 +155,7 @@ Source map: `src/archive.rs` (storage and sync), `src/pack.rs`, `src/journal.rs`
 
 - Desktop app shell (Tauri) with installers, tray icon and scheduled background archiving.
 - Gmail and Microsoft 365 sign-in with OAuth (today: IMAP with app passwords).
-- PST/OST and Outlook `.msg` import; restore to IMAP.
+- PST/OST import; restore to IMAP.
 - OCR for scanned PDFs and images; optional local semantic search ("the email where the landlord agreed to fix the heater").
 - Saved searches, contact directory, attachment gallery.
 - Optional archive encryption.

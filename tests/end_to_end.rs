@@ -201,12 +201,12 @@ fn eml_mailstore_and_mbox_import_and_export_roundtrip() {
     fs::create_dir_all(src.join("alex@example.com/Sent")).unwrap();
     fs::write(src.join("alex@example.com/INBOX/Receipts/1.eml"), msg("a@b.com", "n@g.com", "Receipt one", "Tue, 05 Mar 2019 10:00:00 +0000", "r1")).unwrap();
     fs::write(src.join("alex@example.com/Sent/2.eml"), msg("n@g.com", "a@b.com", "Sent two", "Tue, 05 Mar 2020 10:00:00 +0000", "s2")).unwrap();
-    fs::write(src.join("alex@example.com/Sent/3.msg"), b"not supported").unwrap();
+    fs::write(src.join("alex@example.com/Sent/3.msg"), b"not a real msg file").unwrap();
     let root = d.path().join("arch");
     let mut a = writer(&root, &d.path().join("cache"));
     let st = eml::import(&mut a, &src, "mailstore", eml::Flavor::MailStore, |_| {}).unwrap();
     assert_eq!(st.added, 2);
-    assert_eq!(st.failed, 1, "msg file reported");
+    assert_eq!(st.failed, 1, "broken .msg reported, import continues");
     assert_eq!(ids(&a, "infolder:alex@example.com/INBOX/Receipts"), 1);
     assert_eq!(ids(&a, "source:alex@example.com"), 2);
 

@@ -2,4 +2,6 @@
 
 pub mod eml;
 pub mod imap;
+pub mod mapi;
 pub mod mbox;
+pub mod msg;
