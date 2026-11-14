@@ -85,6 +85,9 @@ fn search_features() {
     assert_eq!(ids(&a, "#4471"), 1);
     assert_eq!(ids(&a, "user_id=99"), 1);
     assert_eq!(ids(&a, "C++"), 1);
+    // stray punctuation and bad dates are ignored, not fatal
+    assert_eq!(ids(&a, "invoice - &"), 2);
+    assert_eq!(ids(&a, "invoice after:someday"), 2);
     // recall mode
     assert_eq!(ids(&a, "~heater ~savings"), 2);
     // garbage never errors
@@ -288,6 +291,14 @@ fn bulk_synthetic_import() {
     // importing again adds nothing
     let st2 = mbox::import(&mut a, &p, "bulk", |_| {}).unwrap();
     assert_eq!(st2.added, 0);
+    drop(a);
+    // another computer opening the same archive builds an identical index
+    let b = reader(&d.path().join("arch"), &d.path().join("cache-other"));
+    assert_eq!(ids(&b, ""), st.added as usize);
+    assert_eq!(ids(&b, "has:attachment"), {
+        let a = reader(&d.path().join("arch"), &d.path().join("cache"));
+        ids(&a, "has:attachment")
+    });
 }
 
 #[test]

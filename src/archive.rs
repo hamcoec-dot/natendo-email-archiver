@@ -245,6 +245,11 @@ impl Archive {
         self.packs.read(n as u32, off, len)
     }
 
+    /// True when the pack holding `loc` is long enough to contain it.
+    fn pack_has(&self, loc: [u64; 3]) -> bool {
+        fs::metadata(pack::pack_path(&self.root, loc[0] as u32)).map(|m| m.len() >= loc[1] + loc[2]).unwrap_or(false)
+    }
+
     /// Pack file, offset and length of a message (for tools and tests).
     pub fn locate(&self, id: &str) -> Result<Option<(PathBuf, u64, u64)>> {
         Ok(self.catalog.locate(id)?.map(|[n, off, len]| (pack::pack_path(&self.root, n as u32), off, len)))
@@ -396,6 +401,7 @@ impl Archive {
         let mut applied = 0u64;
         let mut offsets: Vec<(u32, u64)> = Vec::new();
         let mut began = false;
+        let mut queued: std::collections::HashMap<String, [u64; 3]> = std::collections::HashMap::new();
         'segs: for (seg, path) in journal::segments(&self.root)? {
             let off = self.catalog.applied_offset(seg)?;
             let len = fs::metadata(&path)?.len();
@@ -416,21 +422,18 @@ impl Archive {
             for (e, end) in entries {
                 match e {
                     Entry::Msg { id, src, folder, at, p } => {
-                        if !self.catalog.has_message(&id)? {
+                        if queued.contains_key(&id) {
+                            self.catalog.add_location(&id, &src, &folder, at)?;
+                        } else if !self.catalog.has_message(&id)? {
                             if let Some(loc) = p {
-                                let raw = match self.packs.read(loc[0] as u32, loc[1], loc[2]) {
-                                    Ok(r) => r,
-                                    Err(_) => {
-                                        // Bytes not visible yet (NAS caching lag):
-                                        // stop here and retry from this entry later.
-                                        offsets.push((seg, done_to));
-                                        break 'segs;
-                                    }
-                                };
-                                let parsed = parse::parse(&raw);
-                                self.catalog.insert_message(&id, loc, &parsed)?;
+                                if !self.pack_has(loc) {
+                                    // Bytes not visible yet (NAS caching lag):
+                                    // stop here and retry from this entry later.
+                                    offsets.push((seg, done_to));
+                                    break 'segs;
+                                }
                                 self.catalog.add_location(&id, &src, &folder, at)?;
-                                self.dirty.insert(id);
+                                queued.insert(id, loc);
                             }
                         } else if self.catalog.add_location(&id, &src, &folder, at)? {
                             self.dirty.insert(id);
@@ -451,6 +454,11 @@ impl Archive {
         if !began {
             return Ok(0);
         }
+        // New messages: parse once (in parallel) for catalog + index.
+        // replace=true keeps this idempotent if an earlier attempt indexed
+        // them but failed before the catalog committed.
+        let new: Vec<(String, [u64; 3])> = queued.into_iter().collect();
+        self.index_parallel(new, true, true, |_, _| {})?;
         let dirty: Vec<String> = self.dirty.drain().collect();
         self.reindex_many(&dirty)?;
         self.index.commit()?;
@@ -478,13 +486,22 @@ impl Archive {
                 work.push((id.clone(), loc));
             }
         }
-        self.index_parallel(work, true, |_, _| {})
+        self.index_parallel(work, true, false, |_, _| {})
     }
 
-    fn index_parallel(&mut self, work: Vec<(String, [u64; 3])>, replace: bool, mut progress: impl FnMut(usize, usize)) -> Result<()> {
+    /// Parse messages on worker threads and index them on this thread.
+    /// With `insert_catalog`, also creates their catalog rows (journal sync
+    /// of messages new to this cache), so each message is parsed once.
+    fn index_parallel(
+        &mut self,
+        work: Vec<(String, [u64; 3])>,
+        replace: bool,
+        insert_catalog: bool,
+        mut progress: impl FnMut(usize, usize),
+    ) -> Result<()> {
         let total = work.len();
         let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8);
-        let (tx, rx) = mpsc::sync_channel::<(String, usize, ParsedMessage)>(256);
+        let (tx, rx) = mpsc::sync_channel::<(String, [u64; 3], ParsedMessage)>(256);
         let mut chunks: Vec<Vec<(String, [u64; 3])>> = vec![Vec::new(); workers];
         for (i, w) in work.into_iter().enumerate() {
             chunks[i % workers].push(w);
@@ -495,10 +512,10 @@ impl Archive {
                 let tx = tx.clone();
                 let packs = packs.clone();
                 s.spawn(move || {
-                    for (id, [n, off, len]) in chunk {
-                        if let Ok(raw) = packs.read(n as u32, off, len) {
+                    for (id, loc) in chunk {
+                        if let Ok(raw) = packs.read(loc[0] as u32, loc[1], loc[2]) {
                             let p = parse::parse(&raw);
-                            if tx.send((id, raw.len(), p)).is_err() {
+                            if tx.send((id, loc, p)).is_err() {
                                 break;
                             }
                         }
@@ -507,9 +524,12 @@ impl Archive {
             }
             drop(tx);
             let mut n = 0;
-            for (id, size, p) in rx {
+            for (id, loc, p) in rx {
+                if insert_catalog {
+                    self.catalog.insert_message(&id, loc, &p)?;
+                }
                 let locs = self.catalog.locations(&id)?;
-                let doc = self.index.build_doc(&id, size, &p, &locs);
+                let doc = self.index.build_doc(&id, loc[2] as usize, &p, &locs);
                 self.index.upsert(doc, &id, replace)?;
                 n += 1;
                 if n % 1000 == 0 {
@@ -526,7 +546,7 @@ impl Archive {
         self.index.clear()?;
         self.index.commit()?;
         let work = self.catalog.all_locations()?;
-        self.index_parallel(work, false, progress)?;
+        self.index_parallel(work, false, false, progress)?;
         self.index.commit()?;
         if !self.is_writer() {
             self.index.close_writer()?;

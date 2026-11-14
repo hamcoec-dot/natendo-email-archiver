@@ -528,6 +528,11 @@ impl Ctx<'_> {
     /// A free-text word across all searchable fields.
     fn word(&self, w: &str, fuzzy: bool) -> Option<Box<dyn Query>> {
         let f = self.f;
+        // Lone punctuation ("-", "&", "#") carries no meaning; ignore it
+        // rather than requiring it.
+        if !w.chars().any(|c| c.is_alphanumeric()) {
+            return None;
+        }
         let mut qs: Vec<Box<dyn Query>> = Vec::new();
         if w.contains('*') || w.contains('?') {
             let core: String = w.chars().filter(|c| c.is_alphanumeric() || *c == '*' || *c == '?').collect();
@@ -750,7 +755,13 @@ impl Ctx<'_> {
         match n {
             Node::Word(w) => self.word(w, true),
             Node::Phrase(p) => self.phrase(p),
-            Node::Field { name, value } => self.field(name, value).or_else(|| self.word(&format!("{name}:{value}"), false)),
+            Node::Field { name, value } => match self.field(name, value) {
+                Some(q) => Some(q),
+                // An unparseable date or size is ignored (explain() says so)
+                // rather than turning into a word that matches nothing.
+                None if is_range_field(name) => None,
+                None => self.word(&format!("{name}:{value}"), false),
+            },
             Node::Any(ws) => Self::any(ws.iter().filter_map(|w| self.word(w, true)).collect()),
             Node::Or(v) => Self::any(v.iter().filter_map(|n| self.node(n)).collect()),
             Node::And(v) => Some(self.conj(v)),
@@ -785,6 +796,13 @@ impl Ctx<'_> {
         }
         Box::new(BooleanQuery::new(clauses))
     }
+}
+
+fn is_range_field(name: &str) -> bool {
+    matches!(
+        name,
+        "after" | "before" | "date" | "on" | "year" | "month" | "newer_than" | "older_than" | "newer" | "older" | "larger" | "smaller" | "size"
+    )
 }
 
 pub fn compile(p: &Parsed, index: &Index, f: &Fields) -> Box<dyn Query> {
