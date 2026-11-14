@@ -289,3 +289,13 @@ fn bulk_synthetic_import() {
     let st2 = mbox::import(&mut a, &p, "bulk", |_| {}).unwrap();
     assert_eq!(st2.added, 0);
 }
+
+#[test]
+fn empty_pst_imports_cleanly() {
+    let d = tempfile::tempdir().unwrap();
+    let mut a = writer(&d.path().join("arch"), &d.path().join("cache"));
+    let st = nea::import::pst::import(&mut a, Path::new("tests/fixtures/Empty.pst"), "outlook", |_| {}).unwrap();
+    assert_eq!((st.added, st.failed), (0, 0), "{:?}", st.errors);
+    let st = nea::import::pst::import(&mut a, Path::new("Cargo.toml"), "outlook", |_| {}).unwrap();
+    assert_eq!(st.failed, 1, "non-PST reported, not a crash");
+}

@@ -40,6 +40,8 @@ pub struct AppState {
     pub opts: OpenOptions,
     pub port: u16,
     pub jobs: Mutex<Vec<Job>>,
+    /// Set while an import job owns the index writer; background sync waits.
+    pub importing: std::sync::atomic::AtomicBool,
 }
 
 type S = Arc<AppState>;
@@ -74,12 +76,15 @@ async fn host_guard(State(st): State<S>, req: Request, next: Next) -> Response {
 
 pub async fn serve(archive: Archive, opts: OpenOptions, port: u16, open_browser: bool) -> Result<()> {
     let root = archive.root.clone();
-    let st: S = Arc::new(AppState { archive: Mutex::new(archive), root, opts, port, jobs: Mutex::new(Vec::new()) });
+    let st: S = Arc::new(AppState { archive: Mutex::new(archive), root, opts, port, jobs: Mutex::new(Vec::new()), importing: Default::default() });
 
     // Pick up changes written by other processes or machines (NAS use).
     let bg = st.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(20));
+        if bg.importing.load(std::sync::atomic::Ordering::SeqCst) {
+            continue;
+        }
         if let Ok(mut a) = bg.archive.lock() {
             a.try_sync();
         }
@@ -293,8 +298,11 @@ async fn start_import(State(st): State<S>, Json(r): Json<ImportReq>) -> ApiResul
     if !path.exists() {
         return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "path does not exist"}))));
     }
-    if !matches!(r.kind.as_str(), "eml" | "mailstore" | "mbox") {
-        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "kind must be eml, mailstore or mbox"}))));
+    if !matches!(r.kind.as_str(), "eml" | "mailstore" | "mbox" | "pst") {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "kind must be eml, mailstore, mbox or pst"}))));
+    }
+    if st.importing.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok((StatusCode::CONFLICT, Json(json!({"error": "an import is already running"}))));
     }
     let id = {
         let mut jobs = st.jobs.lock().unwrap();
@@ -319,6 +327,7 @@ async fn start_import(State(st): State<S>, Json(r): Json<ImportReq>) -> ApiResul
             let stats = match r.kind.as_str() {
                 "eml" => crate::import::eml::import(&mut w, &path, src.as_deref().unwrap_or("files"), crate::import::eml::Flavor::Files, prog)?,
                 "mailstore" => crate::import::eml::import(&mut w, &path, src.as_deref().unwrap_or("mailstore"), crate::import::eml::Flavor::MailStore, prog)?,
+                "pst" => crate::import::pst::import(&mut w, &path, src.as_deref().unwrap_or("outlook"), prog)?,
                 _ => crate::import::mbox::import(&mut w, &path, src.as_deref().unwrap_or("mbox"), prog)?,
             };
             w.commit()?;
@@ -326,6 +335,7 @@ async fn start_import(State(st): State<S>, Json(r): Json<ImportReq>) -> ApiResul
             st2.archive.lock().unwrap().try_sync();
             Ok(stats)
         })();
+        st2.importing.store(false, std::sync::atomic::Ordering::SeqCst);
         match res {
             Ok(s) => update(&|j: &mut Job| {
                 j.state = "done".into();

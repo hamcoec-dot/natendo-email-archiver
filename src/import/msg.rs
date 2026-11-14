@@ -168,7 +168,7 @@ pub(crate) mod tests {
     /// Build a small .msg the way Outlook lays it out.
     pub fn build_msg() -> Vec<u8> {
         let mut cf = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).unwrap();
-        let mut put = |cf: &mut cfb::CompoundFile<std::io::Cursor<Vec<u8>>>, path: &str, data: &[u8]| {
+        let put = |cf: &mut cfb::CompoundFile<std::io::Cursor<Vec<u8>>>, path: &str, data: &[u8]| {
             cf.create_stream(path).unwrap().write_all(data).unwrap();
         };
         put(&mut cf, "/__substg1.0_0037001F", &utf16("Lease renewal for Unit 4B"));

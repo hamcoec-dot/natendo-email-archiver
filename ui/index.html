@@ -145,6 +145,7 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
       <option value="mailstore">MailStore Home export (folder of EML files)</option>
       <option value="eml">Folder of .eml files</option>
       <option value="mbox">MBOX file, Google Takeout, or Thunderbird profile folder</option>
+      <option value="pst">Outlook data file (.pst / .ost), experimental</option>
     </select>
     <label for="impPath">Path on this computer</label>
     <input type="text" id="impPath" placeholder="C:\Users\me\Desktop\MailStore Export">
@@ -464,8 +465,9 @@ $("#helpBtn").onclick = () => openModal("#helpModal");
 
 const HINTS = {
   mailstore: "In MailStore Home: Export Email, then Directory (File System), format EML. Choose that folder here. Accounts and folders are rebuilt from the export's folder tree.",
-  eml: "Every .eml file under this folder is imported; subfolders become folders.",
+  eml: "Every .eml and Outlook .msg file under this folder is imported; subfolders become folders.",
   mbox: "A single .mbox file (Google Takeout keeps Gmail labels), or a Thunderbird profile's Mail folder.",
+  pst: "An Outlook .pst or .ost file. Close Outlook first. Folders keep their Outlook names.",
 };
 $("#impKind").onchange = () => $("#impHint").textContent = HINTS[$("#impKind").value];
 $("#impKind").onchange();

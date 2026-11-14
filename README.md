@@ -49,6 +49,7 @@ NEA_IMAP_PASSWORD=... nea --archive MyArchive import imap --host imap.fastmail.c
 nea --archive MyArchive import mbox "Takeout/Mail/All mail Including Spam and Trash.mbox"
 nea --archive MyArchive import mbox "C:/Users/me/AppData/Roaming/Thunderbird/Profiles/xyz/Mail"
 nea --archive MyArchive import eml "D:/Old mail"          # .eml and Outlook .msg files
+nea --archive MyArchive import pst "D:/Outlook/archive.pst"   # experimental
 ```
 
 Running an IMAP import again only fetches new mail (per-folder UIDVALIDITY and last UID are tracked). On Gmail it archives `All Mail` once and records each message's labels as folders, so labelled mail downloads once.
@@ -60,7 +61,7 @@ nea --archive MyArchive search from:dana has:attachment after:2019
 nea --archive MyArchive search '"lease renewal" type:pdf' --json
 ```
 
-Set `NEA_ARCHIVE=MyArchive` to skip `--archive`.
+Set `NEA_ARCHIVE=MyArchive` to skip `--archive`. Without `--archive` the archive is `Documents/Natendo Archive`, and running `nea` with no command opens the web UI, so double-clicking `nea.exe` just works.
 
 ## Moving from MailStore Home
 
@@ -155,7 +156,7 @@ Source map: `src/archive.rs` (storage and sync), `src/pack.rs`, `src/journal.rs`
 
 - Desktop app shell (Tauri) with installers, tray icon and scheduled background archiving.
 - Gmail and Microsoft 365 sign-in with OAuth (today: IMAP with app passwords).
-- PST/OST import; restore to IMAP.
+- PST/OST import is experimental (verified on an empty PST only; needs real-file testing); restore to IMAP.
 - OCR for scanned PDFs and images; optional local semantic search ("the email where the landlord agreed to fix the heater").
 - Saved searches, contact directory, attachment gallery.
 - Optional archive encryption.

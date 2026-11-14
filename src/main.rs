@@ -14,7 +14,8 @@ use nea::query::Sort;
 #[command(name = "nea", version, about)]
 struct Cli {
     /// Archive folder (local disk, USB drive or network share).
-    #[arg(short, long, env = "NEA_ARCHIVE", default_value = "archive", global = true)]
+    /// Default: "Natendo Archive" in your Documents folder.
+    #[arg(short, long, env = "NEA_ARCHIVE", default_value_os_t = default_archive(), global = true)]
     archive: PathBuf,
     /// Where to keep the local search cache (default: OS cache folder).
     #[arg(long, env = "NEA_CACHE_DIR", global = true)]
@@ -26,10 +27,20 @@ struct Cli {
     #[arg(long, global = true)]
     break_lock: bool,
     #[command(subcommand)]
-    cmd: Cmd,
+    /// With no command, opens the web UI (double-click friendly).
+    cmd: Option<Cmd>,
 }
 
-#[derive(Subcommand)]
+fn default_archive() -> PathBuf {
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+    match home {
+        Some(h) if h.join("Documents").is_dir() => h.join("Documents").join("Natendo Archive"),
+        Some(h) => h.join("Natendo Archive"),
+        None => PathBuf::from("Natendo Archive"),
+    }
+}
+
+#[derive(Subcommand, Clone)]
 enum Cmd {
     /// Create a new archive folder.
     Init,
@@ -86,7 +97,7 @@ enum Cmd {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 enum ImportCmd {
     /// A folder of .eml files (subfolders become folders).
     Eml {
@@ -104,6 +115,12 @@ enum ImportCmd {
     Mbox {
         path: PathBuf,
         #[arg(long, default_value = "mbox")]
+        src: String,
+    },
+    /// An Outlook .pst or .ost file (experimental).
+    Pst {
+        path: PathBuf,
+        #[arg(long, default_value = "outlook")]
         src: String,
     },
     /// An IMAP account (Gmail, Outlook.com, Fastmail, any IMAP server).
@@ -184,7 +201,8 @@ fn fmt_date(ts: i64) -> String {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match &cli.cmd {
+    let cmd = cli.cmd.clone().unwrap_or(Cmd::Serve { port: 8765, open: true });
+    match &cmd {
         Cmd::Init => {
             let mut o = opts(&cli, false);
             o.create = true;
@@ -202,6 +220,7 @@ fn main() -> Result<()> {
                 ImportCmd::Eml { dir, src } => eml::import(&mut a, dir, src, eml::Flavor::Files, prog)?,
                 ImportCmd::Mailstore { dir, src } => eml::import(&mut a, dir, src, eml::Flavor::MailStore, prog)?,
                 ImportCmd::Mbox { path, src } => mbox::import(&mut a, path, src, prog)?,
+                ImportCmd::Pst { path, src } => nea::import::pst::import(&mut a, path, src, prog)?,
                 ImportCmd::Imap { host, port, user, password_env, folder, include_all, src, plaintext } => {
                     let password = match std::env::var(password_env) {
                         Ok(p) => p,
@@ -301,8 +320,10 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Serve { port, open } => {
-            let o = opts(&cli, false);
-            let a = Archive::open(&cli.archive, &o).context("opening archive (create one with `nea init`)")?;
+            let mut o = opts(&cli, false);
+            o.create = true;
+            let a = Archive::open(&cli.archive, &o).with_context(|| format!("opening archive {}", cli.archive.display()))?;
+            o.create = false;
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             rt.block_on(nea::server::serve(a, o, *port, *open))?;
         }
