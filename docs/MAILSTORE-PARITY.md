@@ -12,7 +12,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not yet · ➖ intentionally different
 | POP3 accounts ("Leave message on server") | `nea import pop3`; mail is left on the server unless a delete rule is set | ✅ |
 | Microsoft Exchange server | via IMAP (or via Outlook on this PC); a native EWS/Graph source needs an Azure app registration | 🟡 |
 | Gmail, Outlook.com, AOL (via IMAP) | Gmail archived once from All Mail with labels kept as folders; others via IMAP | ✅ |
-| Microsoft Outlook profiles on this PC (pick mailboxes and folders) | `nea import outlook`, Archive mail → Outlook on this PC with a folder picker; drives classic Outlook through its automation interface | ✅ (tested against a simulated Outlook; first real-Outlook run pending) |
+| Microsoft Outlook profiles on this PC (pick mailboxes and folders) | `nea import outlook`, Archive mail → Outlook on this PC with a folder picker; drives classic Outlook through its automation interface | ✅ (tested against a simulated Outlook; a real-Outlook run is still to do on a PC with classic Outlook set up) |
 | Windows Mail / Windows Live Mail stores | found by `nea detect` / "Find mail on this computer", imported as EML folders | ✅ |
 | Mozilla Thunderbird / SeaMonkey profiles | found automatically; whole profiles import with clean folder names | ✅ |
 | Email files (EML, MSG, PST, MBOX) | all four (PST experimental) | ✅ |
