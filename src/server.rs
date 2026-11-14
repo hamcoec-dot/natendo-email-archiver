@@ -127,6 +127,8 @@ pub fn router(st: S) -> Router {
         .route("/api/run", post(run_adhoc))
         .route("/api/jobs", get(jobs))
         .route("/api/export", post(export))
+        .route("/api/export/imap", post(export_imap))
+        .route("/api/export/smtp", post(export_smtp))
         .layer(middleware::from_fn_with_state(st.clone(), host_guard))
         .with_state(st)
 }
@@ -459,6 +461,48 @@ struct ExportReq {
 
 /// Export the messages matching a query to a folder (.eml files) or a
 /// single .mbox file on this computer.
+#[derive(Deserialize)]
+struct DeliverReq {
+    q: String,
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    imap: Option<crate::deliver::ImapTarget>,
+    #[serde(default)]
+    smtp: Option<crate::deliver::SmtpTarget>,
+}
+
+/// Copy the search results into an IMAP mailbox.
+async fn export_imap(State(st): State<S>, Json(r): Json<DeliverReq>) -> ApiResult<impl IntoResponse> {
+    let Some(mut t) = r.imap else {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "imap settings missing"}))));
+    };
+    t.password = r.password;
+    let v = tokio::task::spawn_blocking(move || -> Result<crate::deliver::DeliverStats> {
+        let ids = st.archive.lock().unwrap().index.all_ids(&r.q)?;
+        // Reading needs only a short lock per message; use a separate reader.
+        let a = Archive::open(&st.root, &st.opts)?;
+        crate::deliver::to_imap(&a, &ids, &t, |_| {})
+    })
+    .await??;
+    Ok((StatusCode::OK, Json(json!(v))))
+}
+
+/// Send the search results by email.
+async fn export_smtp(State(st): State<S>, Json(r): Json<DeliverReq>) -> ApiResult<impl IntoResponse> {
+    let Some(mut t) = r.smtp else {
+        return Ok((StatusCode::BAD_REQUEST, Json(json!({"error": "smtp settings missing"}))));
+    };
+    t.password = r.password;
+    let v = tokio::task::spawn_blocking(move || -> Result<crate::deliver::DeliverStats> {
+        let ids = st.archive.lock().unwrap().index.all_ids(&r.q)?;
+        let a = Archive::open(&st.root, &st.opts)?;
+        crate::deliver::to_smtp(&a, &ids, &t, |_| {})
+    })
+    .await??;
+    Ok((StatusCode::OK, Json(json!(v))))
+}
+
 async fn export(State(st): State<S>, Json(r): Json<ExportReq>) -> ApiResult<impl IntoResponse> {
     let out = PathBuf::from(r.path.trim());
     if r.path.trim().is_empty() || !out.is_absolute() {
@@ -470,6 +514,8 @@ async fn export(State(st): State<S>, Json(r): Json<ExportReq>) -> ApiResult<impl
         let (stats, dest) = if r.format == "mbox" {
             let file = if out.extension().is_some() { out.clone() } else { out.join("export.mbox") };
             (crate::export::to_mbox(&a, &ids, &file)?, file)
+        } else if r.format == "msg" {
+            (crate::export::to_msg_dir(&a, &ids, &out)?, out.clone())
         } else {
             (crate::export::to_eml_dir(&a, &ids, &out)?, out.clone())
         };

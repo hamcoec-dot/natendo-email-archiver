@@ -39,6 +39,15 @@ pub fn sanitize(name: &str, max: usize) -> String {
 
 /// One .eml per message, in folders mirroring the first archived location.
 pub fn to_eml_dir(archive: &Archive, ids: &[String], out: &Path) -> Result<ExportStats> {
+    to_files(archive, ids, out, false)
+}
+
+/// One Outlook .msg per message, in folders mirroring the first archived location.
+pub fn to_msg_dir(archive: &Archive, ids: &[String], out: &Path) -> Result<ExportStats> {
+    to_files(archive, ids, out, true)
+}
+
+fn to_files(archive: &Archive, ids: &[String], out: &Path, msg: bool) -> Result<ExportStats> {
     let mut st = ExportStats::default();
     for id in ids {
         let res = (|| -> Result<()> {
@@ -55,8 +64,13 @@ pub fn to_eml_dir(archive: &Archive, ids: &[String], out: &Path) -> Result<Expor
             fs::create_dir_all(&dir)?;
             let date = chrono::DateTime::from_timestamp(p.date, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "nodate".into());
             let subj = if p.subject.is_empty() { "(no subject)".to_string() } else { p.subject.clone() };
-            let name = format!("{} {} [{}].eml", date, sanitize(&subj, 80), &id[..8]);
-            fs::write(dir.join(name), &raw)?;
+            let ext = if msg { "msg" } else { "eml" };
+            let name = format!("{} {} [{}].{ext}", date, sanitize(&subj, 80), &id[..8]);
+            if msg {
+                fs::write(dir.join(name), crate::msgwrite::eml_to_msg(&raw)?)?;
+            } else {
+                fs::write(dir.join(name), &raw)?;
+            }
             Ok(())
         })();
         match res {

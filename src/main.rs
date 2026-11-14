@@ -78,6 +78,50 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Copy messages matching a query into an IMAP mailbox (Gmail, Outlook.com, …).
+    /// Folders are recreated; messages already there are skipped.
+    ExportImap {
+        query: Vec<String>,
+        #[arg(long)]
+        host: String,
+        #[arg(long, default_value_t = 993)]
+        port: u16,
+        #[arg(long)]
+        user: String,
+        #[arg(long, default_value = "NEA_IMAP_PASSWORD")]
+        password_env: String,
+        /// Put everything into this one folder.
+        #[arg(long)]
+        folder: Option<String>,
+        /// Recreate archived folders under this folder (e.g. "Restored").
+        #[arg(long)]
+        prefix: Option<String>,
+        #[arg(long)]
+        plaintext: bool,
+    },
+    /// Send messages matching a query, unchanged, to an email address (SMTP).
+    ExportEmail {
+        query: Vec<String>,
+        /// Recipient (repeatable).
+        #[arg(long, required = true)]
+        to: Vec<String>,
+        /// Envelope sender; usually your own address.
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        host: String,
+        /// 587 = STARTTLS, 465 = TLS.
+        #[arg(long, default_value_t = 587)]
+        port: u16,
+        /// Login user (omit for relays without login).
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long, default_value = "NEA_SMTP_PASSWORD")]
+        password_env: String,
+        /// Unencrypted (local test servers only).
+        #[arg(long)]
+        plaintext: bool,
+    },
     /// Re-hash every message file and report missing or corrupt ones.
     Verify,
     /// Rebuild the local search index from the archive folder.
@@ -337,6 +381,8 @@ enum SortArg {
 enum Format {
     Eml,
     Mbox,
+    /// Outlook .msg files
+    Msg,
 }
 
 fn opts(cli: &Cli, writer: bool) -> OpenOptions {
@@ -503,8 +549,43 @@ fn main() -> Result<()> {
             let st = match format {
                 Format::Eml => nea::export::to_eml_dir(&a, &ids, out)?,
                 Format::Mbox => nea::export::to_mbox(&a, &ids, out)?,
+                Format::Msg => nea::export::to_msg_dir(&a, &ids, out)?,
             };
             println!("Exported {} messages ({} failed) in {:.1}s to {}", st.written, st.failed, t0.elapsed().as_secs_f64(), out.display());
+        }
+        Cmd::ExportImap { query, host, port, user, password_env, folder, prefix, plaintext } => {
+            let a = Archive::open(&cli.archive, &opts(&cli, false))?;
+            let ids = a.index.all_ids(&query.join(" "))?;
+            let password = password_from(password_env, &format!("{user}@{host}"))?;
+            let t = nea::deliver::ImapTarget { host: host.clone(), port: *port, user: user.clone(), password, folder: folder.clone(), prefix: prefix.clone(), plaintext: *plaintext };
+            eprintln!("Copying {} messages to {host}…", ids.len());
+            let s = nea::deliver::to_imap(&a, &ids, &t, |s| eprint!("\r  {} copied, {} already there, {} failed   ", s.sent, s.skipped, s.failed))?;
+            eprintln!();
+            for e in &s.errors {
+                eprintln!("  ! {e}");
+            }
+        }
+        Cmd::ExportEmail { query, to, from, host, port, user, password_env, plaintext } => {
+            let a = Archive::open(&cli.archive, &opts(&cli, false))?;
+            let ids = a.index.all_ids(&query.join(" "))?;
+            let password = match user {
+                Some(u) => password_from(password_env, &format!("{u}@{host}"))?,
+                None => String::new(),
+            };
+            let security = if *plaintext {
+                nea::deliver::Security::Plain
+            } else if *port == 465 {
+                nea::deliver::Security::Tls
+            } else {
+                nea::deliver::Security::Starttls
+            };
+            let t = nea::deliver::SmtpTarget { host: host.clone(), port: *port, security, user: user.clone(), password, from: from.clone(), to: to.clone() };
+            eprintln!("Sending {} messages to {}…", ids.len(), to.join(", "));
+            let s = nea::deliver::to_smtp(&a, &ids, &t, |s| eprint!("\r  {} sent, {} failed   ", s.sent, s.failed))?;
+            eprintln!();
+            for e in &s.errors {
+                eprintln!("  ! {e}");
+            }
         }
         Cmd::Verify => {
             let a = Archive::open(&cli.archive, &opts(&cli, false))?;
@@ -554,6 +635,13 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn password_from(env: &str, label: &str) -> Result<String> {
+    match std::env::var(env) {
+        Ok(p) => Ok(p),
+        Err(_) => Ok(rpassword::prompt_password(format!("Password for {label}: "))?),
+    }
 }
 
 fn run_profile(a: &mut Archive, p: &Profile) -> Result<()> {

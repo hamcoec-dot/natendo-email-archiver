@@ -24,6 +24,8 @@ struct Server {
     deleted_flags: Vec<(String, u32)>,
     /// Messages removed by EXPUNGE.
     expunged: Vec<(String, u32)>,
+    /// APPEND commands received: (folder, command line).
+    appends: Vec<(String, String)>,
 }
 
 impl Server {
@@ -189,6 +191,25 @@ fn handle(stream: TcpStream, st: Arc<Mutex<Server>>) {
             }
             s.deleted_flags.retain(|(f, _)| *f != selected);
             out.extend_from_slice(format!("{tag} OK EXPUNGE done\r\n").as_bytes());
+        } else if upper.starts_with("CREATE") {
+            let name = rest[7..].trim().trim_matches('"').to_string();
+            st.lock().unwrap().folders.entry(name).or_insert((1, BTreeMap::new()));
+            out.extend_from_slice(format!("{tag} OK CREATE done\r\n").as_bytes());
+        } else if upper.starts_with("APPEND") {
+            // APPEND "folder" (flags) "date" {n}
+            let folder = rest[7..].trim_start().trim_start_matches('"').split('"').next().unwrap().to_string();
+            let n: usize = l.rsplit('{').next().unwrap().trim_end_matches('}').parse().unwrap();
+            w.write_all(b"+ Ready\r\n").unwrap();
+            let mut data = vec![0u8; n];
+            std::io::Read::read_exact(&mut r, &mut data).unwrap();
+            let mut crlf = String::new();
+            r.read_line(&mut crlf).unwrap();
+            let mut s = st.lock().unwrap();
+            s.appends.push((folder.clone(), l.to_string()));
+            let msgs = &mut s.folders.get_mut(&folder).expect("APPEND to a missing folder").1;
+            let uid = msgs.keys().last().copied().unwrap_or(0) + 1;
+            msgs.insert(uid, data);
+            out.extend_from_slice(format!("{tag} OK APPEND done\r\n").as_bytes());
         } else if upper.starts_with("LOGOUT") {
             out.extend_from_slice(format!("* BYE\r\n{tag} OK bye\r\n").as_bytes());
             let _ = w.write_all(&out);
@@ -352,4 +373,37 @@ fn imap_date_window_and_delete_after_archiving() {
     let s2 = import(&mut a, &cfg, |_, _| {}).unwrap();
     assert_eq!(s2.added, 1, "{s2:?}");
     assert_eq!(a.index.search("", None, 0, 10).unwrap().total, 4);
+}
+
+#[test]
+fn export_to_imap_restores_folders_once() {
+    use nea::deliver::{to_imap, ImapTarget};
+    let st = Arc::new(Mutex::new(Server::default()));
+    st.lock().unwrap().folders.insert("INBOX".into(), (1, BTreeMap::from([(1, msg("there@x", "Already there"))])));
+    let port = start(st.clone());
+    let d = tempfile::tempdir().unwrap();
+    let mut a = Archive::open(&d.path().join("arch"), &OpenOptions { cache_dir: Some(d.path().join("c")), writer: true, create: true, ..Default::default() }).unwrap();
+    a.add(&msg("one@x", "One"), "old", &["Projects/2019".to_string()]).unwrap();
+    a.add(&msg("two@x", "Two"), "old", &["INBOX".to_string()]).unwrap();
+    a.add(&msg("there@x", "Already there"), "old", &["INBOX".to_string()]).unwrap();
+    a.commit().unwrap();
+    let ids = a.index.all_ids("").unwrap();
+    let t = ImapTarget { host: "127.0.0.1".into(), port, user: "u".into(), password: "p".into(), plaintext: true, ..Default::default() };
+    let s1 = to_imap(&a, &ids, &t, |_| {}).unwrap();
+    assert_eq!((s1.sent, s1.skipped, s1.failed), (2, 1, 0), "{s1:?}");
+    {
+        let s = st.lock().unwrap();
+        assert_eq!(s.folders["Projects/2019"].1.len(), 1);
+        assert!(s.folders.contains_key("Projects"), "parent created");
+        assert_eq!(s.folders["INBOX"].1.len(), 2);
+        let (_, cmd) = &s.appends[0];
+        assert!(cmd.contains("(\\Seen)") && cmd.contains("05-Mar-2019"), "{cmd}");
+    }
+    // Re-running copies nothing twice.
+    let s2 = to_imap(&a, &ids, &t, |_| {}).unwrap();
+    assert_eq!((s2.sent, s2.skipped), (0, 3), "{s2:?}");
+    // Everything into one folder.
+    let t2 = ImapTarget { folder: Some("Restored".into()), ..t };
+    let s3 = to_imap(&a, &ids, &t2, |_| {}).unwrap();
+    assert_eq!(s3.sent, 3);
 }

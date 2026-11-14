@@ -221,9 +221,35 @@ aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; backgroun
     <h2>Export results</h2>
     <p style="font-size:13px;color:var(--muted);margin-top:0" id="expWhat"></p>
     <label for="expFormat">Format</label>
-    <select id="expFormat"><option value="eml">.eml files in folders (one per message)</option><option value="mbox">One .mbox file</option></select>
-    <label for="expPath">Destination on this computer</label>
-    <input type="text" id="expPath" placeholder="C:\Users\me\Desktop\Exported mail">
+    <select id="expFormat">
+      <option value="eml">.eml files in folders (one per message)</option>
+      <option value="msg">Outlook .msg files in folders</option>
+      <option value="mbox">One .mbox file</option>
+      <option value="imap">Copy into an email account (IMAP: Gmail, Outlook.com, …)</option>
+      <option value="smtp">Send by email (SMTP)</option>
+    </select>
+    <div data-fmt="eml msg mbox">
+      <label for="expPath">Destination on this computer</label>
+      <input type="text" id="expPath" placeholder="C:\Users\me\Desktop\Exported mail">
+    </div>
+    <div data-fmt="imap smtp">
+      <div class="grid2">
+        <div><label for="exHost">Server</label><input type="text" id="exHost" placeholder="imap.gmail.com"></div>
+        <div><label for="exPort">Port</label><input type="text" id="exPort" placeholder="993"></div>
+      </div>
+      <label for="exUser">User name</label><input type="text" id="exUser" autocomplete="off">
+      <label for="exPass">Password or app password (never saved)</label><input type="password" id="exPass" autocomplete="off">
+    </div>
+    <div data-fmt="imap">
+      <label for="exFolder">Put everything in this folder (empty: recreate the archived folders)</label><input type="text" id="exFolder" placeholder="Restored from archive">
+    </div>
+    <div data-fmt="smtp">
+      <div class="grid2">
+        <div><label for="exFrom">From (your address)</label><input type="text" id="exFrom"></div>
+        <div><label for="exTo">Send to</label><input type="text" id="exTo" placeholder="someone@example.com"></div>
+      </div>
+      <small style="color:var(--muted)">Each message is sent as it was archived. Port 587 uses STARTTLS, 465 uses TLS.</small>
+    </div>
     <div class="jobs" id="expResult"></div>
     <div class="row"><button class="btn" data-close>Close</button><button class="btn primary" id="expStart">Export</button></div>
   </div>
@@ -671,7 +697,41 @@ $("#exportBtn").onclick = () => {
   $("#expResult").textContent = "";
   openModal("#exportModal");
 };
+const EXP_PORTS = { imap: 993, smtp: 587 };
+$("#expFormat").onchange = () => {
+  const f = $("#expFormat").value;
+  document.querySelectorAll("#exportModal [data-fmt]").forEach((el) => el.style.display = el.dataset.fmt.split(" ").includes(f) ? "" : "none");
+  $("#exPort").placeholder = EXP_PORTS[f] || "";
+  $("#exHost").placeholder = f === "smtp" ? "smtp.gmail.com" : "imap.gmail.com";
+};
+$("#expFormat").onchange();
+async function deliver(f) {
+  const host = $("#exHost").value.trim(), user = $("#exUser").value.trim();
+  const port = parseInt($("#exPort").value, 10) || EXP_PORTS[f];
+  if (!host) throw new Error("Enter the server.");
+  let body;
+  if (f === "imap") {
+    if (!user) throw new Error("Enter the user name.");
+    body = { q: state.q, password: $("#exPass").value, imap: { host, port, user, folder: $("#exFolder").value.trim() || null } };
+  } else {
+    const to = $("#exTo").value.split(/[,;\s]+/).filter(Boolean), from = $("#exFrom").value.trim();
+    if (!to.length || !from) throw new Error("Enter From and Send to.");
+    if (!confirm(`Send ${$("#expWhat").textContent.replace(/^Export /, "")} to ${to.join(", ")}?`)) return null;
+    body = { q: state.q, password: $("#exPass").value, smtp: { host, port, security: port === 465 ? "tls" : "starttls", user: user || null, from, to } };
+  }
+  return postJson("/api/export/" + f, body);
+}
 $("#expStart").onclick = async () => {
+  const f = $("#expFormat").value;
+  if (f === "imap" || f === "smtp") {
+    $("#expResult").textContent = f === "imap" ? "Copying…" : "Sending…";
+    try {
+      const j = await deliver(f);
+      if (!j) { $("#expResult").textContent = ""; return; }
+      $("#expResult").innerHTML = `✓ ${j.sent.toLocaleString()} ${f === "imap" ? "copied" : "sent"}${j.skipped ? `, ${j.skipped.toLocaleString()} already there` : ""}${j.failed ? `, <span style="color:var(--danger)">${j.failed} failed</span><br><small>${j.errors.map(esc).join("<br>")}</small>` : ""}`;
+    } catch (e) { $("#expResult").innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; }
+    return;
+  }
   $("#expResult").textContent = "Exporting…";
   const r = await fetch("/api/export", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ q: state.q, format: $("#expFormat").value, path: $("#expPath").value.trim().replace(/^"|"$/g, "") }) });
   const j = await r.json();
