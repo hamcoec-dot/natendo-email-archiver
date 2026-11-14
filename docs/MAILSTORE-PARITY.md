@@ -62,4 +62,4 @@ Legend: ✅ done · 🟡 partial · ⬜ not yet · ➖ intentionally different
 | Delete from the archive, free unused disk space | `nea delete`, Delete buttons; `nea compact` / "Reclaim space" | ✅ |
 | Check data integrity | `nea verify` | ✅ |
 | Update check (opt-in) | not planned (no network calls of our own) | ➖ |
-| Password protection with recovery key | needs a decision on what to protect: the archive folder only, or also the local search cache (see the thread) | ⬜ |
+| Password protection with recovery key | use your own encryption, e.g. a Cryptomator vault, BitLocker or VeraCrypt (see README, "Encrypting your archive") | ➖ |

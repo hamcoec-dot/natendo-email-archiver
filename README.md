@@ -159,6 +159,15 @@ The UI is a single static page over a small JSON API (`/api/search`, `/api/messa
 - **Dedupe**: messages are identified by the SHA-256 of their bytes. The same message seen in several folders or accounts is stored once with several locations. For non-Gmail IMAP servers, messages already archived from another folder (same Message-ID and size) get a new location without being downloaded again.
 - **Search**: Tantivy (a Lucene-class engine in Rust) with fields for subject, body, from, to/cc, attachment names and text, folders, a raw-token field for symbols, and facet fields. Queries are parsed by a forgiving Gmail-style parser into boosted boolean queries (subject 3x, sender 2x, attachments 0.7x; fuzzy variants at 0.3x so exact matches rank first).
 
+### Encrypting your archive
+
+Natendo has no password feature of its own; use the encryption tool you already trust. The archive is plain files that are only appended to (plus one small `profiles.json` replaced by rename), so it works inside an unlocked encrypted folder or drive:
+
+- **Cryptomator** (files synced to a cloud drive or NAS): unlock the vault, then use a folder inside the vault drive as the archive, e.g. `nea --archive "X:/Mail archive"`. Cryptomator encrypts in small chunks, so appending new mail re-encrypts only the end of each pack.
+- **BitLocker, FileVault, VeraCrypt, LUKS**: put the archive on the encrypted volume.
+
+The search cache holds the text of your mail and lives outside the archive by default (`%LOCALAPPDATA%\NatendoEmailArchiver` and equivalents). On a computer with full-disk encryption that is already protected. Otherwise add `--cache-in-archive` (or `--cache-dir` pointing inside the vault) so the cache is encrypted too; searches are then as fast as the encrypted drive allows. Close the app before locking the vault.
+
 ### Maintenance commands
 
 ```bash
