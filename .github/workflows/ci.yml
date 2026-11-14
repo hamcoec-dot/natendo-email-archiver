@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-targets
+      - run: cargo build --release
+      - name: Benchmark (20k synthetic messages)
+        run: ./target/release/nea bench --messages 20000
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nea-${{ matrix.os }}
+          path: |
+            target/release/nea
+            target/release/nea.exe
+          if-no-files-found: ignore

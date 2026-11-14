@@ -2,7 +2,9 @@
 name = "natendo-archive"
 version = "0.1.0"
 edition = "2021"
-description = "Natendo Email Archive: local-first email archiving with best-in-class search"
+description = "Natendo Email Archiver: local-first email archiving with best-in-class search"
+license = "Apache-2.0"
+repository = "https://github.com/hamcoec-dot/natendo-email-archiver"
 publish = false
 
 [lib]

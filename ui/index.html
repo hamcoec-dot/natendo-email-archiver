@@ -1,1 +1,510 @@
-<!doctype html><title>Natendo Email Archiver</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Natendo Email Archiver</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2032%2032%22%20width%3D%2232%22%20height%3D%2232%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22bg%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%232A2F7A%22/%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23121633%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%2230%22%20height%3D%2230%22%20rx%3D%227%22%20fill%3D%22url%28%23bg%29%22/%3E%3Crect%20x%3D%227%22%20y%3D%227%22%20width%3D%2218%22%20height%3D%222.5%22%20rx%3D%221.25%22%20fill%3D%22%238C93F0%22/%3E%3Crect%20x%3D%225%22%20y%3D%2211%22%20width%3D%2222%22%20height%3D%2214%22%20rx%3D%222%22%20fill%3D%22%23F4F6FF%22/%3E%3Cpath%20d%3D%22M6.5%2012.5%20L16%2019%20L25.5%2012.5%22%20fill%3D%22none%22%20stroke%3D%22%233A40A8%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22/%3E%3Ccircle%20cx%3D%2221%22%20cy%3D%2220.5%22%20r%3D%224.6%22%20fill%3D%22%231B1F4B%22%20stroke%3D%22%23FFB547%22%20stroke-width%3D%222%22/%3E%3Cpath%20d%3D%22M24.4%2023.9%20L27%2026.5%22%20stroke%3D%22%23FFB547%22%20stroke-width%3D%222.6%22%20stroke-linecap%3D%22round%22/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --text: #1b1f24; --muted: #5f6b7a; --faint: #8b95a3;
+  --border: #e1e5ea; --accent: #3A40A8; --accent-soft: #e9eafc; --hl: #ffe0a3; --hl-text: #1b1f24; --danger: #b42318;
+  --sel: #f0f1fd; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --panel: #181c21; --panel-2: #1f242b; --text: #e6e9ee; --muted: #a2acb9; --faint: #7c8694;
+    --border: #2a3038; --accent: #8C93F0; --accent-soft: #23264d; --hl: #6b4a00; --hl-text: #fff6c7; --danger: #ff8a7a;
+    --sel: #1d2638; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --panel: #181c21; --panel-2: #1f242b; --text: #e6e9ee; --muted: #a2acb9; --faint: #7c8694;
+  --border: #2a3038; --accent: #8C93F0; --accent-soft: #23264d; --hl: #6b4a00; --hl-text: #fff6c7; --danger: #ff8a7a;
+  --sel: #1d2638; --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; }
+button, input, select { font: inherit; color: inherit; }
+b, .hl { background: var(--hl); color: var(--hl-text); font-weight: 600; border-radius: 2px; padding: 0 1px; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; white-space: nowrap; }
+.brand svg { width: 26px; height: 26px; }
+.searchbox { flex: 1; position: relative; max-width: 900px; }
+.searchbox input { width: 100%; padding: 9px 12px 9px 36px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); outline: none; font-size: 15px; }
+.searchbox input:focus { border-color: var(--accent); background: var(--panel); box-shadow: 0 0 0 3px var(--accent-soft); }
+.searchbox .icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--faint); width: 16px; height: 16px; }
+.suggest { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); z-index: 20; display: none; max-height: 320px; overflow: auto; }
+.suggest div { padding: 7px 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+.suggest div.active, .suggest div:hover { background: var(--sel); }
+.suggest small { color: var(--faint); }
+.btn { border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+a.btn { color: var(--text); text-decoration: none; }
+.btn.primary { background: var(--accent); color: white; border-color: var(--accent); }
+.btn.small { padding: 3px 8px; font-size: 12.5px; }
+select.btn { padding-right: 6px; }
+main { flex: 1; display: grid; grid-template-columns: 250px minmax(320px, 440px) 1fr; min-height: 0; }
+aside, .results, .reader { overflow: auto; min-height: 0; }
+aside { border-right: 1px solid var(--border); padding: 10px 8px 24px; background: var(--panel); }
+.facet h3 { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin: 14px 8px 4px; font-weight: 650; }
+.facet a { display: flex; justify-content: space-between; gap: 6px; padding: 3px 8px; border-radius: 6px; color: var(--text); text-decoration: none; cursor: pointer; font-size: 13px; }
+.facet a span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.facet a:hover { background: var(--sel); }
+.facet a .n { color: var(--faint); font-variant-numeric: tabular-nums; }
+.facet .more { color: var(--accent); font-size: 12px; padding: 2px 8px; cursor: pointer; }
+.status { padding: 8px 14px; color: var(--muted); font-size: 12.5px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 8px; align-items: center; background: var(--panel); position: sticky; top: 0; z-index: 2; }
+.status .explain { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.results { border-right: 1px solid var(--border); background: var(--panel); }
+.hit { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.hit:hover { background: var(--panel-2); }
+.hit.sel { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+.hit .row1 { display: flex; justify-content: space-between; gap: 10px; }
+.hit .from { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hit .date { color: var(--faint); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hit .subj { margin: 1px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hit .snip { color: var(--muted); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.hit .att { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.hit .att .snip { -webkit-line-clamp: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.chip { font-size: 11.5px; padding: 1px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; cursor: pointer; }
+.reader { padding: 0; background: var(--bg); }
+.reader .empty { color: var(--faint); text-align: center; margin-top: 18vh; padding: 0 24px; }
+.reader .empty h2 { color: var(--muted); font-weight: 600; }
+.msg { background: var(--panel); margin: 14px; border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+.msg .head { padding: 16px 20px 10px; border-bottom: 1px solid var(--border); }
+.msg h1 { font-size: 19px; margin: 0 0 8px; font-weight: 650; }
+.msg .meta { color: var(--muted); font-size: 13px; display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; }
+.msg .meta span:nth-child(odd) { color: var(--faint); }
+.msg .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.atts { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--border); }
+.att-card { display: flex; gap: 8px; align-items: center; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; text-decoration: none; color: var(--text); font-size: 13px; max-width: 280px; }
+.att-card:hover { border-color: var(--accent); }
+.att-card .ext { font-size: 10.5px; font-weight: 700; background: var(--panel-2); border-radius: 4px; padding: 2px 5px; color: var(--muted); }
+.att-card .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.body { padding: 16px 20px 20px; }
+.body pre { white-space: pre-wrap; word-wrap: break-word; font: 13.5px/1.55 ui-monospace, "Cascadia Mono", Consolas, monospace; margin: 0; }
+.body iframe { width: 100%; border: 0; min-height: 300px; background: white; border-radius: 6px; }
+.headers pre { font-size: 12px; background: var(--panel-2); padding: 12px; border-radius: 8px; overflow: auto; max-height: 300px; }
+.thread { padding: 6px 20px 14px; }
+.thread a { display: block; padding: 4px 0; color: var(--accent); cursor: pointer; text-decoration: none; font-size: 13px; }
+.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+.modal { background: var(--panel); border-radius: 14px; padding: 20px 22px; width: min(620px, 100%); max-height: 88vh; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+.modal h2 { margin: 0 0 12px; font-size: 18px; }
+.modal label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+.modal input[type=text], .modal select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+.modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.help table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.help td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.help td:first-child { font-family: ui-monospace, Consolas, monospace; white-space: nowrap; color: var(--accent); cursor: pointer; }
+.jobs { font-size: 13px; color: var(--muted); margin-top: 12px; }
+.loading { padding: 16px; color: var(--faint); text-align: center; }
+.kbd { font: 11px ui-monospace, Consolas, monospace; border: 1px solid var(--border); border-bottom-width: 2px; padding: 0 4px; border-radius: 4px; color: var(--muted); }
+@media (max-width: 1000px) {
+  main { grid-template-columns: 1fr; }
+  aside { display: none; }
+  .reader { display: none; }
+  body.reading .results { display: none; }
+  body.reading .reader { display: block; }
+  .brand span { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand" title="Natendo Email Archiver">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="brandbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2A2F7A"/><stop offset="1" stop-color="#121633"/></linearGradient></defs><rect x="1" y="1" width="30" height="30" rx="7" fill="url(#brandbg)"/><rect x="7" y="7" width="18" height="2.5" rx="1.25" fill="#8C93F0"/><rect x="5" y="11" width="22" height="14" rx="2" fill="#F4F6FF"/><path d="M6.5 12.5 L16 19 L25.5 12.5" fill="none" stroke="#3A40A8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="21" cy="20.5" r="4.6" fill="#1B1F4B" stroke="#FFB547" stroke-width="2"/><path d="M24.4 23.9 L27 26.5" stroke="#FFB547" stroke-width="2.6" stroke-linecap="round"/></svg>
+    <span>Natendo Email Archiver</span>
+  </div>
+  <div class="searchbox">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search everything: words, from:dana, has:attachment, after:2019, &quot;exact phrase&quot;…  ( / )">
+    <div class="suggest" id="suggest"></div>
+  </div>
+  <select id="sort" class="btn" title="Sort">
+    <option value="">Best match</option>
+    <option value="newest">Newest</option>
+    <option value="oldest">Oldest</option>
+  </select>
+  <button class="btn" id="helpBtn" title="Search syntax">?</button>
+  <button class="btn" id="importBtn">Import</button>
+  <button class="btn" id="infoBtn" title="Archive info">Archive</button>
+</header>
+<main>
+  <aside id="facets"></aside>
+  <section class="results" id="results"><div class="status"><span class="explain" id="explain">Loading…</span><span id="count"></span></div><div id="hits"></div></section>
+  <section class="reader" id="reader"><div class="empty"><h2>Find anything in your mail</h2><p>Type to search. Click a sender, year or folder on the left to narrow results; Shift+click to exclude.</p><p><span class="kbd">/</span> search · <span class="kbd">j</span>/<span class="kbd">k</span> move · <span class="kbd">Esc</span> back</p></div></section>
+</main>
+
+<div class="modal-bg" id="importModal">
+  <div class="modal">
+    <h2>Import mail</h2>
+    <label for="impKind">Source</label>
+    <select id="impKind">
+      <option value="mailstore">MailStore Home export (folder of EML files)</option>
+      <option value="eml">Folder of .eml files</option>
+      <option value="mbox">MBOX file, Google Takeout, or Thunderbird profile folder</option>
+    </select>
+    <label for="impPath">Path on this computer</label>
+    <input type="text" id="impPath" placeholder="C:\Users\me\Desktop\MailStore Export">
+    <p style="font-size:12.5px;color:var(--muted)" id="impHint"></p>
+    <p style="font-size:12.5px;color:var(--muted)">IMAP accounts (Gmail, Outlook.com, any server) are archived from the command line for now: <code>nea import imap --host imap.gmail.com --user you@gmail.com</code></p>
+    <div class="jobs" id="jobs"></div>
+    <div class="row"><button class="btn" data-close>Close</button><button class="btn primary" id="impStart">Start import</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="helpModal">
+  <div class="modal help">
+    <h2>Search syntax</h2>
+    <p style="color:var(--muted);font-size:13px;margin-top:0">Plain words just work: they match stems ("receipts" finds "receipt") and tolerate typos. Nothing you type is ever an error. Click an example to try it.</p>
+    <table id="helpTable"></table>
+    <div class="row"><button class="btn" data-close>Close</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="infoModal">
+  <div class="modal"><h2>Archive</h2><div id="info"></div><div class="row"><button class="btn" data-close>Close</button></div></div>
+</div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const PAGE = 50;
+let state = { q: "", sort: "", offset: 0, total: 0, hits: [], sel: -1, loading: false, ctrl: null, currentId: null };
+
+function fmtDate(ts, long) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000), now = new Date();
+  if (long) return d.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+const fmtSize = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB";
+const shortFrom = (f) => { const m = /^(.*?)\s*<([^>]+)>/.exec(f || ""); return m ? (m[1] || m[2]) : (f || "(unknown sender)"); };
+const addrList = (list) => (list || []).map((a) => a.name ? `${esc(a.name)} &lt;${esc(a.email)}&gt;` : esc(a.email)).join(", ");
+
+// ---------- URL state
+function readUrl() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  state.q = p.get("q") || ""; state.sort = p.get("sort") || "";
+  $("#q").value = state.q; $("#sort").value = state.sort;
+  return p.get("m");
+}
+function writeUrl() {
+  const p = new URLSearchParams();
+  if (state.q) p.set("q", state.q);
+  if (state.sort) p.set("sort", state.sort);
+  if (state.currentId) p.set("m", state.currentId);
+  history.replaceState(null, "", "#" + p.toString());
+}
+
+// ---------- search
+async function search(append) {
+  if (state.ctrl) state.ctrl.abort();
+  const ctrl = new AbortController(); state.ctrl = ctrl;
+  if (!append) { state.offset = 0; }
+  state.loading = true;
+  const params = new URLSearchParams({ q: state.q, offset: state.offset, limit: PAGE });
+  if (state.sort) params.set("sort", state.sort);
+  try {
+    const r = await fetch("/api/search?" + params, { signal: ctrl.signal });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    state.total = data.total;
+    state.hits = append ? state.hits.concat(data.hits) : data.hits;
+    if (!append) { state.sel = -1; $("#results").scrollTop = 0; renderFacets(data.facets); }
+    renderHits(append ? data.hits : null);
+    $("#explain").textContent = state.q ? "Searching: " + data.explain : "All mail";
+    $("#explain").title = data.explain;
+    $("#count").textContent = `${data.total.toLocaleString()} result${data.total === 1 ? "" : "s"} · ${data.took_ms} ms`;
+    writeUrl();
+  } catch (e) {
+    if (e.name !== "AbortError") { $("#hits").innerHTML = `<div class="loading">Search failed: ${esc(e.message)}</div>`; }
+  } finally { if (state.ctrl === ctrl) state.loading = false; }
+}
+
+function renderHits(newOnes) {
+  const box = $("#hits");
+  if (!newOnes) box.innerHTML = "";
+  const old = box.querySelector("#more"); if (old) old.remove();
+  if (!state.hits.length) { box.innerHTML = `<div class="loading">No messages match. Try fewer words, or prefix words with ~ to match any of them.</div>`; return; }
+  const start = newOnes ? state.hits.length - newOnes.length : 0;
+  const frag = document.createDocumentFragment();
+  for (let i = start; i < state.hits.length; i++) {
+    const h = state.hits[i];
+    const el = document.createElement("div");
+    el.className = "hit"; el.dataset.i = i;
+    const atts = h.attachments.length ? `<div class="att">📎 ${esc(h.attachments.slice(0, 3).join(", "))}${h.attachments.length > 3 ? " +" + (h.attachments.length - 3) : ""}${h.att_snippet ? `<div class="snip">${h.att_snippet}</div>` : ""}</div>` : "";
+    el.innerHTML = `<div class="row1"><span class="from">${esc(shortFrom(h.from))}</span><span class="date">${fmtDate(h.date)}</span></div>
+      <div class="subj">${esc(h.subject || "(no subject)")}</div><div class="snip">${h.snippet}</div>${atts}`;
+    el.onclick = () => select(i, true);
+    frag.appendChild(el);
+  }
+  box.appendChild(frag);
+  if (state.hits.length < state.total) {
+    const more = document.createElement("div"); more.className = "loading"; more.id = "more"; more.textContent = "Loading more…";
+    box.appendChild(more);
+  }
+}
+
+$("#results").addEventListener("scroll", () => {
+  const r = $("#results");
+  if (!state.loading && state.hits.length < state.total && r.scrollTop + r.clientHeight > r.scrollHeight - 400) {
+    state.offset = state.hits.length; search(true);
+  }
+});
+
+function select(i, open) {
+  if (i < 0 || i >= state.hits.length) return;
+  document.querySelectorAll(".hit.sel").forEach((e) => e.classList.remove("sel"));
+  const el = document.querySelector(`.hit[data-i="${i}"]`);
+  if (el) { el.classList.add("sel"); el.scrollIntoView({ block: "nearest" }); }
+  state.sel = i;
+  if (open) openMessage(state.hits[i].id);
+}
+
+// ---------- facets
+const FACET_TITLES = { sender: "From", date: "Date", folder: "Folders", type: "Attachments" };
+function renderFacets(f) {
+  const box = $("#facets"); box.innerHTML = "";
+  for (const key of ["sender", "date", "folder", "type"]) {
+    const list = f[key] || [];
+    if (!list.length) continue;
+    const div = document.createElement("div"); div.className = "facet";
+    div.innerHTML = `<h3>${FACET_TITLES[key]}</h3>`;
+    const limit = 8;
+    list.forEach((b, idx) => {
+      const a = document.createElement("a");
+      a.innerHTML = `<span title="${esc(b.label)}">${esc(b.label)}</span><span class="n">${b.count.toLocaleString()}</span>`;
+      a.title = "Click to narrow, Shift+click to exclude";
+      a.onclick = (e) => addFilter(b.filter, e.shiftKey);
+      if (idx >= limit) a.style.display = "none";
+      div.appendChild(a);
+    });
+    if (list.length > limit) {
+      const m = document.createElement("div"); m.className = "more"; m.textContent = `Show ${list.length - limit} more`;
+      m.onclick = () => { div.querySelectorAll("a").forEach((a) => a.style.display = ""); m.remove(); };
+      div.appendChild(m);
+    }
+    box.appendChild(div);
+  }
+}
+function addFilter(f, exclude) {
+  const clause = (exclude ? "-" : "") + f;
+  if (!state.q.includes(clause)) state.q = (state.q.trim() + " " + clause).trim();
+  $("#q").value = state.q; search(false);
+}
+
+// ---------- message view
+async function openMessage(id, remote) {
+  state.currentId = id; writeUrl();
+  document.body.classList.add("reading");
+  const box = $("#reader");
+  box.innerHTML = `<div class="loading">Opening…</div>`;
+  const r = await fetch(`/api/message/${id}${remote ? "?remote=true" : ""}`);
+  const m = await r.json();
+  if (m.error) { box.innerHTML = `<div class="loading">${esc(m.error)}</div>`; return; }
+  const folders = m.locations.map((l) => `<span class="chip" data-f="${esc(l.src + "/" + l.folder)}">${esc(l.folder || l.src)}</span>`).join("");
+  const atts = m.attachments.length ? `<div class="atts">${m.attachments.map((a) => {
+    const ext = (a.name.includes(".") ? a.name.split(".").pop() : "").slice(0, 5).toUpperCase();
+    return `<a class="att-card" href="/api/message/${id}/att/${a.index}" title="${esc(a.name)} · ${fmtSize(a.size)}"><span class="ext">${esc(ext || "FILE")}</span><span class="name">${esc(a.name)}</span><small style="color:var(--faint)">${fmtSize(a.size)}</small></a>`;
+  }).join("")}</div>` : "";
+  const hasHtml = !!m.html;
+  box.innerHTML = `<div class="msg">
+    <div class="head">
+      <button class="btn small" id="back" style="display:none;margin-bottom:8px">← Results</button>
+      <h1>${esc(m.subject || "(no subject)")}</h1>
+      <div class="meta">
+        <span>From</span><span>${addrList(m.from)}</span>
+        <span>To</span><span>${addrList(m.to)}</span>
+        ${m.cc.length ? `<span>Cc</span><span>${addrList(m.cc)}</span>` : ""}
+        <span>Date</span><span>${esc(fmtDate(m.date, true))}</span>
+      </div>
+      <div class="chips">${folders}</div>
+      <div class="tools">
+        ${hasHtml ? `<button class="btn small" id="toggleView">Plain text</button>` : ""}
+        ${hasHtml && !remote ? `<button class="btn small" id="remoteBtn" title="Remote images can tell the sender you opened this">Load remote images</button>` : ""}
+        ${m.thread_count > 1 ? `<button class="btn small" id="threadBtn">Conversation (${m.thread_count})</button>` : ""}
+        <button class="btn small" id="fromBtn">More from sender</button>
+        <button class="btn small" id="hdrBtn">Headers</button>
+        <a class="btn small" href="/api/message/${id}/raw" style="text-decoration:none">Download .eml</a>
+      </div>
+    </div>
+    ${atts}
+    <div class="thread" id="thread" style="display:none"></div>
+    <div class="headers" id="hdrs" style="display:none;padding:0 20px"><pre>${esc(m.headers)}</pre></div>
+    <div class="body" id="body"></div>
+  </div>`;
+  const body = $("#body");
+  const showText = () => { body.innerHTML = `<pre>${highlightText(esc(m.text || ""))}</pre>`; };
+  const showHtml = () => {
+    const f = document.createElement("iframe");
+    // No allow-scripts: mail can never run code. Same-origin only so the
+    // frame can be sized to its content.
+    f.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox allow-same-origin");
+    f.setAttribute("referrerpolicy", "no-referrer");
+    f.srcdoc = m.html;
+    f.onload = () => { try { f.style.height = (f.contentDocument.documentElement.scrollHeight + 20) + "px"; } catch (e) { f.style.height = "70vh"; } };
+    body.innerHTML = ""; body.appendChild(f);
+  };
+  let html = hasHtml; html ? showHtml() : showText();
+  const t = $("#toggleView"); if (t) t.onclick = () => { html = !html; html ? showHtml() : showText(); t.textContent = html ? "Plain text" : "Formatted"; };
+  const rb = $("#remoteBtn"); if (rb) rb.onclick = () => openMessage(id, true);
+  $("#hdrBtn").onclick = () => { const h = $("#hdrs"); h.style.display = h.style.display === "none" ? "" : "none"; };
+  $("#fromBtn").onclick = () => { const e = m.from[0] && m.from[0].email; if (e) { state.q = "sender:" + e; $("#q").value = state.q; search(false); } };
+  const tb = $("#threadBtn"); if (tb) tb.onclick = () => showThread(id);
+  box.querySelectorAll(".chip").forEach((c) => c.onclick = () => addFilter('infolder:"' + c.dataset.f.replace(/\/$/, "") + '"', false));
+  const back = $("#back"); if (window.matchMedia("(max-width: 1000px)").matches) { back.style.display = ""; back.onclick = closeReader; }
+}
+function closeReader() { document.body.classList.remove("reading"); state.currentId = null; writeUrl(); }
+
+// Highlight the user's plain query words in the plain-text body.
+function highlightText(escaped) {
+  const words = state.q.split(/\s+/).filter((w) => w && !w.includes(":") && !w.startsWith("-") && w !== "OR").map((w) => w.replace(/^[~"(]+|["*)]+$/g, "")).filter((w) => w.length > 1);
+  if (!words.length) return escaped;
+  const re = new RegExp("(" + words.map((w) => esc(w).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
+  return escaped.replace(re, '<span class="hl">$1</span>');
+}
+
+async function showThread(id) {
+  const box = $("#thread");
+  if (box.style.display !== "none") { box.style.display = "none"; return; }
+  const r = await (await fetch(`/api/thread/${id}`)).json();
+  box.innerHTML = r.hits.map((h) => `<a data-id="${h.id}">${h.id === id ? "▶ " : ""}${esc(fmtDate(h.date))} · ${esc(shortFrom(h.from))} · ${esc(h.subject)}</a>`).join("");
+  box.querySelectorAll("a").forEach((a) => a.onclick = () => openMessage(a.dataset.id));
+  box.style.display = "";
+}
+
+// ---------- autocomplete for from:/to:/cc:/sender:
+let sugIdx = -1, sugItems = [];
+async function suggest() {
+  const input = $("#q"), pos = input.selectionStart, before = input.value.slice(0, pos);
+  const m = /(?:^|\s)(-?)(from|to|cc|sender):("?)([^\s"]*)$/i.exec(before);
+  const box = $("#suggest");
+  if (!m || m[4].length < 1) { box.style.display = "none"; sugItems = []; return; }
+  const r = await (await fetch("/api/contacts?q=" + encodeURIComponent(m[4]))).json();
+  sugItems = r.map((c) => ({ c, start: pos - m[4].length - m[3].length }));
+  sugIdx = -1;
+  if (!sugItems.length) { box.style.display = "none"; return; }
+  box.innerHTML = sugItems.map((s, i) => `<div data-i="${i}"><span>${esc(s.c.name || s.c.email)} <small>${esc(s.c.name ? s.c.email : "")}</small></span><small>${s.c.count}</small></div>`).join("");
+  box.querySelectorAll("div").forEach((d) => d.onmousedown = (e) => { e.preventDefault(); applySuggestion(+d.dataset.i); });
+  box.style.display = "block";
+}
+function applySuggestion(i) {
+  const s = sugItems[i]; if (!s) return;
+  const input = $("#q"), pos = input.selectionStart;
+  input.value = input.value.slice(0, s.start) + s.c.email + " " + input.value.slice(pos);
+  $("#suggest").style.display = "none"; sugItems = [];
+  state.q = input.value.trim(); search(false); input.focus();
+}
+
+let timer = null;
+$("#q").addEventListener("input", () => {
+  clearTimeout(timer);
+  suggest();
+  timer = setTimeout(() => { state.q = $("#q").value.trim(); search(false); }, 120);
+});
+$("#q").addEventListener("keydown", (e) => {
+  const box = $("#suggest");
+  if (box.style.display === "block" && sugItems.length) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      sugIdx = (sugIdx + (e.key === "ArrowDown" ? 1 : -1) + sugItems.length) % sugItems.length;
+      box.querySelectorAll("div").forEach((d, i) => d.classList.toggle("active", i === sugIdx));
+      return;
+    }
+    if ((e.key === "Enter" || e.key === "Tab") && sugIdx >= 0) { e.preventDefault(); applySuggestion(sugIdx); return; }
+    if (e.key === "Escape") { box.style.display = "none"; return; }
+  }
+  if (e.key === "Enter") { clearTimeout(timer); state.q = $("#q").value.trim(); search(false); }
+  if (e.key === "ArrowDown") { e.preventDefault(); $("#q").blur(); select(0, true); }
+});
+$("#q").addEventListener("blur", () => setTimeout(() => $("#suggest").style.display = "none", 150));
+$("#sort").onchange = () => { state.sort = $("#sort").value; search(false); };
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "/") { e.preventDefault(); $("#q").focus(); $("#q").select(); }
+  else if (e.key === "j") select(Math.min(state.sel + 1, state.hits.length - 1), true);
+  else if (e.key === "k") select(Math.max(state.sel - 1, 0), true);
+  else if (e.key === "Escape") { document.querySelectorAll(".modal-bg").forEach((m) => m.style.display = "none"); closeReader(); }
+});
+
+// ---------- modals
+function openModal(id) { $(id).style.display = "flex"; }
+document.querySelectorAll(".modal-bg").forEach((m) => {
+  m.addEventListener("click", (e) => { if (e.target === m || e.target.hasAttribute("data-close")) m.style.display = "none"; });
+});
+
+const HELP = [
+  ["invoice acme", "All words. Stemmed and typo-tolerant (invoce works), ranked by relevance"],
+  ['"purchase order 44*"', "Exact phrase; a trailing * matches word starts"],
+  ["invoice OR receipt -newsletter", "Either word, excluding newsletters; - works anywhere"],
+  ["from:dana to:bob cc:priya", "People (partial names and addresses work)"],
+  ["sender:dana@acme.com domain:acme.com", "Exact sender or sender domain"],
+  ["subject:lease body:heater", "Only in the subject or body"],
+  ['att:"lease renewal"', "Only inside attachment text (PDF, Word, Excel, PowerPoint, text)"],
+  ["has:attachment type:pdf filename:*.xlsx", "Attachments by presence, type or name"],
+  ["after:2019-03 before:2020", "Date ranges (year, month or day)"],
+  ['date:"last month" year:2021 month:2021-07', "Calendar periods; also today, last week, last summer, march 2021"],
+  ["newer_than:30d older_than:2y", "Relative age (d, w, m, y)"],
+  ["larger:5M smaller:100k", "Message size"],
+  ["folder:receipts in:inbox label:travel", "Folders and Gmail labels"],
+  ["source:mailstore", "Where it was archived from"],
+  ["#4471 C++ user_id=99", "Codes with symbols are kept intact"],
+  ["~heater ~landlord ~repair", "Any of these words (broad recall)"],
+];
+$("#helpTable").innerHTML = HELP.map(([q, d]) => `<tr><td data-q="${esc(q)}">${esc(q)}</td><td>${esc(d)}</td></tr>`).join("");
+document.querySelectorAll("#helpTable td[data-q]").forEach((td) => td.onclick = () => { state.q = td.dataset.q; $("#q").value = state.q; $("#helpModal").style.display = "none"; search(false); });
+$("#helpBtn").onclick = () => openModal("#helpModal");
+
+const HINTS = {
+  mailstore: "In MailStore Home: Export Email, then Directory (File System), format EML. Choose that folder here. Accounts and folders are rebuilt from the export's folder tree.",
+  eml: "Every .eml file under this folder is imported; subfolders become folders.",
+  mbox: "A single .mbox file (Google Takeout keeps Gmail labels), or a Thunderbird profile's Mail folder.",
+};
+$("#impKind").onchange = () => $("#impHint").textContent = HINTS[$("#impKind").value];
+$("#impKind").onchange();
+$("#importBtn").onclick = () => { openModal("#importModal"); pollJobs(); };
+$("#impStart").onclick = async () => {
+  const path = $("#impPath").value.trim().replace(/^"|"$/g, "");
+  if (!path) return;
+  const r = await fetch("/api/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: $("#impKind").value, path }) });
+  const j = await r.json();
+  if (j.error) { $("#jobs").innerHTML = `<span style="color:var(--danger)">${esc(j.error)}</span>`; return; }
+  pollJobs();
+};
+let pollTimer = null, wasRunning = false;
+async function pollJobs() {
+  clearTimeout(pollTimer);
+  const jobs = await (await fetch("/api/jobs")).json();
+  $("#jobs").innerHTML = jobs.slice().reverse().map((j) => {
+    const s = j.stats || {};
+    return `<div>${j.state === "running" ? "⏳" : j.state === "done" ? "✓" : "✗"} ${esc(j.kind)}: ${esc(j.path)}<br><small>${(s.added || 0).toLocaleString()} new, ${(s.duplicates || 0).toLocaleString()} already archived, ${(s.failed || 0)} failed${j.error ? " · " + esc(j.error) : ""}</small></div>`;
+  }).join("");
+  const running = jobs.some((j) => j.state === "running");
+  if (running) { wasRunning = true; pollTimer = setTimeout(pollJobs, 1000); }
+  else if (wasRunning) { wasRunning = false; search(false); }
+}
+
+$("#infoBtn").onclick = async () => {
+  openModal("#infoModal");
+  const d = await (await fetch("/api/stats")).json();
+  const s = d.stats;
+  $("#info").innerHTML = `<p><strong>${s.messages.toLocaleString()}</strong> messages · ${fmtSize(s.bytes)} · ${s.attachments.toLocaleString()} attachments · ${d.indexed.toLocaleString()} indexed</p>
+    ${s.first_date ? `<p>From ${esc(fmtDate(s.first_date))} to ${esc(fmtDate(s.last_date))}</p>` : ""}
+    <p style="font-size:13px;color:var(--muted)">Archive folder: <code>${esc(d.archive)}</code><br>Search cache (local, rebuildable): <code>${esc(d.cache)}</code><br>Version ${esc(d.version)}</p>
+    <h3 style="font-size:14px">Folders</h3><div style="max-height:240px;overflow:auto;font-size:13px">${d.folders.map((f) => `<div>${f.count.toLocaleString()} · ${esc(f.src)} / ${esc(f.folder)}</div>`).join("") || "None yet"}</div>
+    <h3 style="font-size:14px">Recent imports</h3><div style="font-size:13px">${d.imports.map((i) => `<div>${esc(fmtDate(i.at))} · ${esc(i.kind)} · ${esc(i.path)} · ${i.added} new, ${i.dupes} dupes, ${i.failed} failed</div>`).join("") || "None yet"}</div>`;
+};
+
+const initial = readUrl();
+search(false);
+if (initial) openMessage(initial);
+</script>
+</body>
+</html>

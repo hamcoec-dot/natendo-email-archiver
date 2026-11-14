@@ -72,6 +72,13 @@ enum Cmd {
         #[arg(long)]
         open: bool,
     },
+    /// Write synthetic demo mail to an mbox file (for trying the app).
+    Demo {
+        #[arg(long, default_value_t = 5000)]
+        messages: u64,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Benchmark import and search on synthetic mail in a temporary archive.
     Bench {
         #[arg(long, default_value_t = 20000)]
@@ -300,6 +307,10 @@ fn main() -> Result<()> {
             rt.block_on(nea::server::serve(a, o, *port, *open))?;
         }
         Cmd::Bench { messages } => bench(*messages)?,
+        Cmd::Demo { messages, out } => {
+            write_synth_mbox(out, *messages)?;
+            println!("Wrote {messages} demo messages to {}", out.display());
+        }
     }
     Ok(())
 }
@@ -317,20 +328,27 @@ fn resolve_id(a: &Archive, prefix: &str) -> Result<String> {
     }
 }
 
+fn write_synth_mbox(path: &std::path::Path, n: u64) -> Result<()> {
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
+    for i in 0..n {
+        writeln!(w, "From demo@local Mon Jan  1 00:00:00 2024")?;
+        w.write_all(&nea::synth::message(7, i))?;
+        writeln!(w)?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
 fn bench(n: u64) -> Result<()> {
     let dir = std::env::temp_dir().join(format!("nea-bench-{}", std::process::id()));
     let src_dir = dir.join("src");
     std::fs::create_dir_all(&src_dir)?;
     println!("Generating {n} synthetic messages…");
     let mbox_path = src_dir.join("bench.mbox");
-    {
-        let mut w = std::io::BufWriter::new(std::fs::File::create(&mbox_path)?);
-        for i in 0..n {
-            writeln!(w, "From bench@local Mon Jan  1 00:00:00 2024")?;
-            w.write_all(&nea::synth::message(7, i))?;
-            writeln!(w)?;
-        }
-    }
+    write_synth_mbox(&mbox_path, n)?;
     let o = OpenOptions { cache_dir: Some(dir.join("cache")), writer: true, create: true, ..Default::default() };
     let mut a = Archive::open(&dir.join("archive"), &o)?;
     let t0 = Instant::now();
