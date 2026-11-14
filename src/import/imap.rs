@@ -119,7 +119,7 @@ pub fn import(archive: &mut Archive, cfg: &ImapConfig, mut progress: impl FnMut(
             let mut to_fetch: Vec<u32> = chunk.to_vec();
             // Header-first: skip downloading messages archived from another folder.
             if !use_labels {
-                let heads = session.uid_fetch(&set, "(UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")?;
+                let heads = session.uid_fetch(&set, "(UID RFC822.SIZE BODY.PEEK[HEADER])")?;
                 to_fetch.clear();
                 for f in heads.iter() {
                     let Some(uid) = f.uid else { continue };
